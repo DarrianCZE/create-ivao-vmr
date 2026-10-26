@@ -57,46 +57,50 @@ class Tee:
             except Exception:
                 pass
 
-try:
-    log = open(log_file, "w", encoding="utf-8")
-    sys.stdout = Tee(sys.__stdout__, log)
-    sys.stderr = Tee(sys.__stderr__, log)
-    print("Log file: " + os.path.abspath(log_file))
-except OSError as err:
-    print("Could not create log file " + log_file + ": " + str(err))
+# The command line part (log file, options) runs only when the script is started directly.
+# vmr_gui.py imports this file to reuse the livery rules below without running anything.
+def parse_command_line():
+    global verbose, models_directory, output_directory, output_file, lib, pause_at_end
+    try:
+        log = open(log_file, "w", encoding="utf-8")
+        sys.stdout = Tee(sys.__stdout__, log)
+        sys.stderr = Tee(sys.__stderr__, log)
+        print("Log file: " + os.path.abspath(log_file))
+    except OSError as err:
+        print("Could not create log file " + log_file + ": " + str(err))
 
-argsList = sys.argv[1:]
-options = "d:o:vl:p:n"
-long_options = ['directory=', 'output=', 'verbose', 'library=', 'output-directory=', 'no-pause']
+    argsList = sys.argv[1:]
+    options = "d:o:vl:p:n"
+    long_options = ['directory=', 'output=', 'verbose', 'library=', 'output-directory=', 'no-pause']
 
-try:
-    arguments, values = getopt.getopt(argsList, options, long_options)
+    try:
+        arguments, values = getopt.getopt(argsList, options, long_options)
 
-    for currentArgument, currentValue in arguments:
-        if currentArgument in ("-d", "--directory"):
-            models_directory = currentValue
-            print("Reading from " + currentValue)
-        elif currentArgument in ("-l", "--library"):
-            if currentValue == "ivao":
-                lib = "ivao"
-            elif currentValue == "aig":
-                lib = "aig"
-                output_file = "aig.vmr"
-            else:
-                print("Error! Library can only be either \"ivao\" or \"aig\"")
-                exit()
-        elif currentArgument in ("-o", "--output"):
-            output_file = currentValue
-        elif currentArgument in ("-v", "--verbose"):
-            verbose = True
-        elif currentArgument in ("-p", "--output-directory"):
-            output_directory = Path(currentValue)
-        elif currentArgument in ("-n", "--no-pause"):
-            pause_at_end = False
-    
-    print("Output to: " + os.path.abspath(output_directory / output_file))
-except getopt.error as err:
-    print(err)
+        for currentArgument, currentValue in arguments:
+            if currentArgument in ("-d", "--directory"):
+                models_directory = currentValue
+                print("Reading from " + currentValue)
+            elif currentArgument in ("-l", "--library"):
+                if currentValue == "ivao":
+                    lib = "ivao"
+                elif currentValue == "aig":
+                    lib = "aig"
+                    output_file = "aig.vmr"
+                else:
+                    print("Error! Library can only be either \"ivao\" or \"aig\"")
+                    exit()
+            elif currentArgument in ("-o", "--output"):
+                output_file = currentValue
+            elif currentArgument in ("-v", "--verbose"):
+                verbose = True
+            elif currentArgument in ("-p", "--output-directory"):
+                output_directory = Path(currentValue)
+            elif currentArgument in ("-n", "--no-pause"):
+                pause_at_end = False
+
+        print("Output to: " + os.path.abspath(output_directory / output_file))
+    except getopt.error as err:
+        print(err)
 
 # Creates the string that will be output on each new line of the VMR to act as a Rule.
 # callsign: String referring to the 3-letter ICAO identifier used in a callsign (ex. AAL, DAL, UAL, BAW, etc.)
@@ -390,15 +394,17 @@ def main():
         print("Usually this is because of an error where the file says [VERSION]. See GitHub for more details.")
         print("The VMR was still created but aircraft of this type will not show up unless the problem is fixed and the script is run again.")
 
-try:
-    main()
-except Exception:
-    print("\n\nERROR: the script crashed. Details:")
-    traceback.print_exc()
-    print("The full output was saved to " + os.path.abspath(log_file) + ". Please attach it when reporting the problem on GitHub.")
-finally:
-    if pause_at_end:
-        try:
-            input("\nPress Enter to close this window...")
-        except EOFError:
-            pass
+if __name__ == "__main__":
+    parse_command_line()
+    try:
+        main()
+    except Exception:
+        print("\n\nERROR: the script crashed. Details:")
+        traceback.print_exc()
+        print("The full output was saved to " + os.path.abspath(log_file) + ". Please attach it when reporting the problem on GitHub.")
+    finally:
+        if pause_at_end:
+            try:
+                input("\nPress Enter to close this window...")
+            except EOFError:
+                pass

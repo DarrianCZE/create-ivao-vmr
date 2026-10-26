@@ -74,8 +74,8 @@ More verbose logging of what's going on. Get a real sense of speed. Makes you fe
 `-n | --no-pause`  
 By default the script waits for you to press Enter before it closes, so the output can be read when the script is started by double-clicking it. Use this option to skip the pause (for example when running the script from a batch file).
 
-## GUI: build your own VMR with presets and previews
-`vmr_gui.py` is a small graphical front end for building a *custom* VMR that you place **before** the IVAO MTL VMR in vPilot. It is meant for the rules the MTL-generated file does not contain: airline groups that share liveries (for example the Smartwings group flying Czech Airlines colours), wet-lease operators, or liveries you want to see instead of the default one.
+## GUI: build your own VMR with presets and the MTL rules
+`vmr_gui.py` is a small graphical front end for building a VMR out of three parts: ready-made presets, your own rules, and the rules generated from your MTL (the same ones `create_vmr.py` makes). The presets and your rules are meant for what the MTL-generated file does not contain: airline groups that share liveries (for example the Smartwings group flying Czech Airlines colours), wet-lease operators, or liveries you want to see instead of the default one. They come first in the file, so they win in vPilot.
 
 **Portable .exe (no Python, no installation):** download `IVAO_VMR_Generator.exe` from the [releases](https://github.com/vojta48/create-ivao-vmr/releases) (or from the *Build portable exe* run under *Actions*), put it into your `Packages/Community/IVAO_MTL` folder and double-click it. The GUI opens in its own window (it uses the Microsoft Edge WebView2 runtime that is part of Windows 10 and 11). If something goes wrong, the program shows a message and writes the details to `vmr_gui.log` next to the .exe. The `gui` and `presets` folders are packed inside the .exe. To add your own presets, create a `presets` folder next to the .exe and put your `.vmr` files there. Windows SmartScreen may warn about an unknown publisher because the file is not signed; choose *More info → Run anyway*.
 
@@ -87,10 +87,11 @@ With `pip install pywebview` the GUI opens in its own window; without it, it ope
 
 - **Tick presets**: every `.vmr` file in the `presets` folder is offered as a ready-made rule set. Two are included: `smartwings_group.vmr` (Smartwings, Smartwings Poland/Hungary/Slovakia and Czech Airlines sharing the Smartwings fleet) and `extra_rules.vmr` (liveries missing from the MTL, substituted with a similar one). Add your own `.vmr` files to the folder to offer them as presets; a `<!-- comment -->` in the file is shown as its description.
 - **Write your own rules**: one line per `ModelMatchRule` with the callsign prefix (3-letter airline code, empty for any callsign), the ICAO type and the MTL livery ids. Several liveries are separated with `//`, vPilot then picks one at random. Rules can also be imported from an existing VMR file.
-- **See the liveries**: the right column lists every livery installed in your MTL with its picture and catalog name. Search by airline, type, id or name and click a livery to add it to the rule you are editing. Each rule shows a preview of its liveries, and warns about ids that are not installed.
-- **Save**: the result is written to the folder you run the script from (or `-p`), or downloaded through the browser. Add the file in vPilot under *Settings → Model Matching → Custom Rules* and move it above the IVAO MTL VMR, so that its rules win.
+- **Add the MTL rules**: tick *Add the rules generated from my MTL* and choose *standard liveries only* (what `create_vmr.py` writes to `ivaomtl_standard.vmr`, see above) or *all liveries* (`ivaomtl.vmr`). They are appended after the presets and your rules, so one file is enough in vPilot. Optionally the livery list (`<name>_liveries.csv`) is written next to it.
+- **See the liveries**: the right column lists every livery installed in your MTL with its catalog name, type and airline, and marks the special liveries. Search by airline, type, id or name and click a livery to add it to the rule you are editing. The ↗ next to a livery opens it in the [MTL catalog](https://mtl.ivao.aero/catalog), where you can see its picture. Each rule links its liveries the same way and warns about ids that are not installed.
+- **Save**: the result is written to the folder you run the script from (or `-p`), or saved through a file dialog. Add the file in vPilot under *Settings → Model Matching → Custom Rules*: with the MTL rules included it replaces the IVAO MTL VMR, without them move it above the IVAO MTL VMR, so that its rules win.
 
-Previews are the thumbnails that ship with the MTL packages. If you have an IVAO API key, enter it in *Settings* in the GUI and the pictures from the [MTL catalog](https://mtl.ivao.aero/catalog) are shown instead (the key is stored in `vmr_gui_settings.json` next to the script, do not share that file). Clicking a preview opens the livery in the MTL catalog.
+The GUI does not show pictures of the liveries: the thumbnails inside the MTL packages are one generic picture for every livery, and the pictures of the catalog can only be found through the IVAO API, which needs an API key.
 
 Options: `-d` the folder that contains `SimObjects/Airplanes` (default: the current folder, for the .exe the folder it lies in), `-p` the output folder, `--port` the port of the local server, `--browser` to use the web browser instead of the window, `--no-browser` to only run the server.
 
@@ -110,7 +111,7 @@ The Windows executable `IVAO_VMR_Generator.exe` attached to a [release](https://
 | Committers and reviewers | [vojta48](https://github.com/vojta48) |
 | Approvers | [vojta48](https://github.com/vojta48) |
 
-**Privacy policy.** The program runs entirely on your computer. It does not collect, store or send any personal data, usage statistics or crash reports. It connects to the internet only when you ask it to: when you enter an IVAO API key in the settings it looks up livery pictures on `api.ivao.aero` and loads them from `download.ivao.aero`, and clicking a preview opens `mtl.ivao.aero` in your browser. Those requests are covered by [IVAO's privacy policy](https://ivao.aero/privacy). The settings file `vmr_gui_settings.json` next to the program is the only place where your API key is stored.
+**Privacy policy.** The program runs entirely on your computer. It does not collect, store or send any personal data, usage statistics or crash reports. It does not connect to the internet by itself; clicking a livery link opens `mtl.ivao.aero` in your browser, which is covered by [IVAO's privacy policy](https://ivao.aero/privacy).
 
 **Reporting a problem.** If you think a signed release contains something it should not, do not run it and open an [issue](https://github.com/vojta48/create-ivao-vmr/issues) with the file's SHA256 hash and where you downloaded it.
 

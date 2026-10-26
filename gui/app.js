@@ -8,9 +8,9 @@
     rules: [],            // {callsign, type, models: [..]}
     selectedRule: -1,
     liveries: new Map(),  // mtl id -> livery
-    hasApiKey: false,
+    mtlRules: { all: [], standard: [] },   // the rules create_vmr.py generates from the MTL
+    mtl: { enabled: false, mode: "standard", liveryList: false },
     catalogSearch: "https://mtl.ivao.aero/catalog?textureName={name}",
-    notAvailableImage: "https://static.ivao.aero/mtl/clouds.jpg",
   };
   const DRAFT_KEY = "ivao-vmr-generator-draft";
 
@@ -49,6 +49,7 @@
       localStorage.setItem(DRAFT_KEY, JSON.stringify({
         rules: state.rules,
         selectedPresets: [...state.selectedPresets],
+        mtl: state.mtl,
         fileName: $("fileName").value,
       }));
     } catch (e) { /* ignore */ }
@@ -60,6 +61,7 @@
       if (!draft) return;
       state.rules = (draft.rules || []).map(normaliseRule);
       state.selectedPresets = new Set(draft.selectedPresets || []);
+      if (draft.mtl) state.mtl = { ...state.mtl, ...draft.mtl };
       if (draft.fileName) $("fileName").value = draft.fileName;
     } catch (e) { /* ignore */ }
   }
@@ -76,25 +78,19 @@
     return text.split("//").map((m) => m.trim()).filter(Boolean);
   }
 
-  // ---------------------------------------------------------------- previews
-  function thumbnail(mtlId, size) {
+  // ---------------------------------------------------------------- models
+  function catalogLink(mtlId, text) {
+    return el("a", { href: state.catalogSearch.replace("{name}", encodeURIComponent(mtlId)), target: "_blank", rel: "noreferrer", title: "Open " + mtlId + " in the MTL catalog" }, text);
+  }
+
+  // A small label for one model of a rule: its id (linked to the MTL catalog) and its livery name.
+  function modelChip(mtlId) {
     const livery = state.liveries.get(mtlId);
-    const missing = !livery;
-    const img = el("img", { alt: mtlId, loading: "lazy" });
-    // Preferred source: picture from the MTL catalog (needs the API key). Fallbacks: local thumbnail, placeholder.
-    const sources = [];
-    if (state.hasApiKey) sources.push("/api/catalog-image/" + encodeURIComponent(mtlId));
-    if (livery && livery.hasThumbnail) sources.push("/api/thumbnail/" + encodeURIComponent(mtlId));
-    sources.push(state.notAvailableImage);
-    let index = 0;
-    img.src = sources[index];
-    img.addEventListener("error", () => {
-      index += 1;
-      if (index < sources.length) img.src = sources[index];
-    });
-    const caption = livery ? (livery.name || mtlId) : mtlId + " (not installed)";
-    const link = el("a", { href: state.catalogSearch.replace("{name}", encodeURIComponent(mtlId)), target: "_blank", rel: "noreferrer", title: "Open in the MTL catalog" }, img);
-    return el("div", { class: "thumb" + (missing ? " missing" : ""), title: caption }, link, el("div", { class: "cap" }, mtlId + (livery && livery.name ? " – " + livery.name : "")));
+    const missing = state.liveries.size > 0 && !livery;
+    const chip = el("span", { class: "chip" + (missing ? " missing" : ""), title: missing ? "Not installed in your MTL" : (livery && livery.name) || mtlId }, catalogLink(mtlId, mtlId + " ↗"));
+    if (livery && livery.name) chip.append(" ", el("span", { class: "muted" }, livery.name));
+    if (missing) chip.append(" ", el("span", { class: "muted" }, "(not installed)"));
+    return chip;
   }
 
   // ---------------------------------------------------------------- presets
@@ -143,7 +139,7 @@
       const models = el("input", { type: "text", value: rule.models.join("//"), placeholder: "B738TVSWL//B738TVSWL3", list: "models", onfocus: select });
       models.addEventListener("change", () => { rule.models = modelsFromText(models.value); renderRules(); });
       models.addEventListener("input", () => { rule.models = modelsFromText(models.value); updateOutput(); });
-      const preview = el("div", { class: "thumbs" }, ...rule.models.map((m) => thumbnail(m)));
+      const chips = el("div", { class: "chips" }, ...rule.models.map((m) => modelChip(m)));
       const warnings = [];
       if (!rule.type) warnings.push("Type is required.");
       if (rule.models.length === 0) warnings.push("At least one model is required.");
@@ -154,8 +150,7 @@
       row.append(
         el("td", { class: "callsign" }, callsign),
         el("td", { class: "type" }, type),
-        el("td", { class: "models" }, models, warnings.length ? el("div", { class: "warning" }, warnings.join(" ")) : null),
-        el("td", { class: "preview" }, preview),
+        el("td", { class: "models" }, models, chips, warnings.length ? el("div", { class: "warning" }, warnings.join(" ")) : null),
         el("td", {}, el("button", { class: "small danger", title: "Remove rule", onclick: () => { state.rules.splice(index, 1); if (state.selectedRule >= state.rules.length) state.selectedRule = state.rules.length - 1; renderRules(); } }, "✕"))
       );
       body.append(row);
@@ -183,14 +178,42 @@
     renderRules();
   }
 
+  // ---------------------------------------------------------------- IVAO MTL
+  function mtlRulesSelected() {
+    if (!state.mtl.enabled) return [];
+    return state.mtlRules[state.mtl.mode] || [];
+  }
+
+  function renderMtl() {
+    const have = state.liveries.size > 0;
+    $("mtlEnabled").checked = state.mtl.enabled && have;
+    $("mtlEnabled").disabled = !have;
+    $("mtlLabel").textContent = have ? "Add the rules generated from my MTL" : "Add the rules generated from my MTL (no MTL found)";
+    $("mtlStandard").checked = state.mtl.mode === "standard";
+    $("mtlAll").checked = state.mtl.mode === "all";
+    $("mtlStandardLabel").textContent = "standard liveries only (" + state.mtlRules.standard.length + " rules, like ivaomtl_standard.vmr)";
+    $("mtlAllLabel").textContent = "all liveries (" + state.mtlRules.all.length + " rules, like ivaomtl.vmr)";
+    $("mtlLiveryList").checked = state.mtl.liveryList;
+    for (const input of document.querySelectorAll("#mtl .indent input")) input.disabled = !(have && state.mtl.enabled);
+  }
+
   // ---------------------------------------------------------------- output
+  // Order in the file = priority in vPilot: presets, then my rules, then the rules generated from the MTL.
   function combinedRules() {
     const rules = [];
     for (const preset of state.presets) {
       if (state.selectedPresets.has(preset.id)) rules.push(...preset.rules);
     }
     rules.push(...state.rules.map(normaliseRule).filter((r) => r.type && r.models.length));
+    rules.push(...mtlRulesSelected());
     return rules;
+  }
+
+  function outputComment() {
+    const parts = [];
+    if (state.selectedPresets.size) parts.push("Presets: " + [...state.selectedPresets].join(", "));
+    if (state.mtl.enabled) parts.push("IVAO MTL: " + (state.mtl.mode === "standard" ? "standard liveries only" : "all liveries"));
+    return parts.join("; ");
   }
 
   function buildVmr(rules) {
@@ -208,9 +231,18 @@
 
   function updateOutput() {
     const rules = combinedRules();
+    const own = rules.length - mtlRulesSelected().length;
     $("vmrText").textContent = buildVmr(rules);
     $("save").textContent = "Save to output folder (" + rules.length + " rules)";
+    $("outputSummary").textContent = state.mtl.enabled
+      ? own + " rules from presets and my rules, then " + mtlRulesSelected().length + " rules generated from the MTL. In vPilot this file replaces the MTL VMR."
+      : own + " rules from presets and my rules. In vPilot put this file above the IVAO MTL VMR.";
     saveDraft();
+  }
+
+  function savedMessage(files) {
+    const where = state.mtl.enabled ? "use this file in vPilot (Settings → Model Matching → Custom Rules) instead of the IVAO MTL VMR." : "add this file in vPilot (Settings → Model Matching → Custom Rules) above the IVAO MTL VMR.";
+    return "Saved: " + files.join(", ") + " – " + where;
   }
 
   async function save() {
@@ -218,8 +250,8 @@
     if (rules.length === 0) { $("saveResult").textContent = "Nothing to save: tick a preset or add a rule."; return; }
     $("saveResult").textContent = "Saving…";
     try {
-      const result = await api("/api/save", { fileName: $("fileName").value, rules: rules, comment: "Presets: " + [...state.selectedPresets].join(", ") });
-      $("saveResult").textContent = "Saved: " + result.path + " – add this file in vPilot (Settings → Model Matching → Custom Rules) above the IVAO MTL VMR.";
+      const result = await api("/api/save", { fileName: $("fileName").value, rules: rules, comment: outputComment(), liveryList: state.mtl.enabled && state.mtl.liveryList });
+      $("saveResult").textContent = savedMessage(result.files || [result.path]);
     } catch (err) {
       $("saveResult").textContent = "Error: " + err.message;
     }
@@ -234,7 +266,7 @@
       try {
         const result = await window.pywebview.api.save_as($("fileName").value || "custom.vmr", buildVmr(rules));
         if (result.error) $("saveResult").textContent = "Error: " + result.error;
-        else if (!result.cancelled) $("saveResult").textContent = "Saved: " + result.path + " – add this file in vPilot (Settings → Model Matching → Custom Rules) above the IVAO MTL VMR.";
+        else if (!result.cancelled) $("saveResult").textContent = savedMessage([result.path]);
       } catch (err) {
         $("saveResult").textContent = "Error: " + err;
       }
@@ -261,9 +293,14 @@
       : matches.length + " of " + all.length + " liveries" + (matches.length > limit ? " (showing the first " + limit + ", refine the search)" : "");
     for (const livery of matches.slice(0, limit)) {
       const card = el("div", { class: "card", title: "Add " + livery.id + " to the selected rule", onclick: () => addModelToSelectedRule(livery) });
-      const thumb = thumbnail(livery.id);
-      const img = thumb.querySelector("img");
-      card.append(img, el("div", { class: "id" }, livery.id), el("div", { class: "name" }, livery.name || livery.model));
+      const link = catalogLink(livery.id, "↗");
+      link.className = "catalog";
+      link.addEventListener("click", (e) => e.stopPropagation());
+      card.append(
+        el("div", { class: "head" }, el("div", { class: "id" }, livery.id), link),
+        el("div", { class: "name" + (livery.standard ? "" : " special") }, livery.name || livery.model),
+        el("div", { class: "meta" }, livery.type + " · " + (livery.airline || "any airline") + (livery.standard ? "" : " · special livery"))
+      );
       grid.append(card);
     }
   }
@@ -320,11 +357,9 @@
     try {
       const data = await api("/api/state");
       state.presets = data.presets;
-      state.hasApiKey = data.settings.hasApiKey;
       state.catalogSearch = data.catalogSearch;
-      state.notAvailableImage = data.notAvailableImage;
       state.liveries = new Map(data.liveries.map((l) => [l.id, l]));
-      $("apiKeyState").textContent = state.hasApiKey ? "API key saved: previews come from the MTL catalog." : "No API key: previews use the local thumbnails of your MTL.";
+      state.mtlRules = data.mtlRules;
       if (data.libraryFound) {
         setStatus(data.liveries.length + " liveries found in " + data.airplanesFolder + " · output folder: " + data.outputDir);
       } else {
@@ -336,9 +371,15 @@
     }
     renderPresets();
     renderDatalists();
+    renderMtl();
     renderRules();
     renderLibrary();
   }
+
+  $("mtlEnabled").addEventListener("change", () => { state.mtl.enabled = $("mtlEnabled").checked; renderMtl(); updateOutput(); });
+  $("mtlStandard").addEventListener("change", () => { state.mtl.mode = "standard"; updateOutput(); });
+  $("mtlAll").addEventListener("change", () => { state.mtl.mode = "all"; updateOutput(); });
+  $("mtlLiveryList").addEventListener("change", () => { state.mtl.liveryList = $("mtlLiveryList").checked; saveDraft(); });
 
   $("addRule").addEventListener("click", () => addRule());
   $("clearRules").addEventListener("click", () => { if (state.rules.length === 0 || confirm("Remove all your rules?")) { state.rules = []; state.selectedRule = -1; renderRules(); } });
@@ -347,18 +388,5 @@
   $("fileName").addEventListener("input", saveDraft);
   $("search").addEventListener("input", renderLibrary);
   $("importFile").addEventListener("change", (e) => { if (e.target.files[0]) importFile(e.target.files[0]); e.target.value = ""; });
-  $("saveApiKey").addEventListener("click", async () => {
-    try {
-      const result = await api("/api/settings", { apiKey: $("apiKey").value });
-      state.hasApiKey = result.hasApiKey;
-      $("apiKey").value = "";
-      $("apiKeyState").textContent = state.hasApiKey ? "API key saved: previews come from the MTL catalog." : "API key removed: previews use the local thumbnails.";
-      renderRules();
-      renderLibrary();
-    } catch (err) {
-      $("apiKeyState").textContent = "Error: " + err.message;
-    }
-  });
-
   init();
 })();

@@ -8,8 +8,10 @@
 # In the GUI you can:
 #   - turn on ready-made rule sets from the "presets" folder (for example the Smartwings group),
 #   - add your own ModelMatchRule lines (CallsignPrefix / TypeCode / ModelName, "//" for alternatives),
-#   - see a preview of every livery (local thumbnail from the MTL, or the picture from the MTL catalog),
+#   - add the rules generated from your MTL (the same rules create_vmr.py makes, all liveries or the
+#     standard liveries only) after your own rules, so that one VMR file is enough in vPilot,
 #   - save the result as a VMR file.
+# Every livery links to its page in the MTL catalog (https://mtl.ivao.aero/catalog).
 #
 # Options:
 #   -d | --directory [path]   folder that contains SimObjects/Airplanes (default: the current folder)
@@ -20,20 +22,21 @@
 
 import argparse
 import configparser
-import csv
 import json
 import mimetypes
 import os
 import re
 import sys
 import threading
-import urllib.error
 import urllib.parse
-import urllib.request
 import webbrowser
 import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+# The rule that decides whether a livery is the airline's standard livery or a special one is shared
+# with create_vmr.py, so the GUI and the script produce the same standard-only VMR.
+from create_vmr import is_standard_livery
 
 # When packed into an .exe with PyInstaller (see build_exe.spec), the gui and presets folders are bundled
 # inside the executable and unpacked to a temporary folder (sys._MEIPASS). Files the user edits or that
@@ -43,7 +46,6 @@ APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).re
 BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
 GUI_DIR = BUNDLE_DIR / "gui"
 PRESETS_DIRS = [BUNDLE_DIR / "presets", APP_DIR / "presets"]  # a preset next to the exe replaces a bundled one of the same name
-SETTINGS_FILE = APP_DIR / "vmr_gui_settings.json"
 LOG_FILE = APP_DIR / "vmr_gui.log"
 # The script works in the folder it is run from, like create_vmr.py. The .exe works in its own folder,
 # because Windows does not always start a double-clicked program in the folder it lies in.
@@ -51,14 +53,10 @@ DEFAULT_DIR = str(APP_DIR) if FROZEN else "."
 # Set by the build workflow: open the window, close it again after a few seconds and exit.
 SELF_TEST = os.environ.get("IVAO_VMR_GUI_SELFTEST") == "1"
 
-# The MTL catalog (https://mtl.ivao.aero/catalog) shows the picture of a livery from this address.
-# The numeric id of a texture comes from the IVAO API, which needs an API key (see settings in the GUI).
-IVAO_API = "https://api.ivao.aero"
-CATALOG_IMAGE = "https://download.ivao.aero/v2/aircraftsTextures/{id}/files/latest/image"
+# Page of a livery in the MTL catalog (https://mtl.ivao.aero/catalog). Pictures of the liveries are not
+# shown: the thumbnails in the MTL are one generic picture for every livery, and the catalog pictures
+# can only be found through the IVAO API, which needs an API key.
 CATALOG_SEARCH = "https://mtl.ivao.aero/catalog?textureName={name}"
-NOT_AVAILABLE_IMG = "https://static.ivao.aero/mtl/clouds.jpg"
-
-THUMBNAIL_NAMES = ["thumbnail.jpg", "thumbnail.png", "thumbnail.JPG", "thumbnail_small.jpg"]
 
 
 # --------------------------------------------------------------------------------------------------
@@ -191,31 +189,53 @@ class Library:
                 continue
             texture = _unquote(entry.get("texture", ""))
             ui_type = _unquote(entry.get("ui_type", ""))
+            name = _unquote(entry.get("ui_variation", ""))
             self.liveries[title] = {
                 "id": title,
                 "airline": texture[:3].upper() if len(texture) >= 3 else "",
                 "type": ui_type[:4].upper(),
                 "texture": texture,
-                "name": _unquote(entry.get("ui_variation", "")),
+                "name": name,
                 "model": model_dir.name,
-                "thumbnail": self._find_thumbnail(model_dir, texture),
+                "standard": is_standard_livery(texture, name),
             }
 
-    @staticmethod
-    def _find_thumbnail(model_dir, texture):
-        folders = [model_dir / ("texture." + texture), model_dir / "texture"] if texture else [model_dir / "texture"]
-        for folder in folders:
-            for name in THUMBNAIL_NAMES:
-                candidate = folder / name
-                if candidate.is_file():
-                    return str(candidate)
-        return None
-
     def summary(self):
-        return [
-            {k: v for k, v in livery.items() if k != "thumbnail"} | {"hasThumbnail": livery["thumbnail"] is not None}
-            for livery in self.liveries.values()
-        ]
+        return list(self.liveries.values())
+
+    def mtl_rules(self, standard_only):
+        """The rules create_vmr.py generates from the MTL: one rule per airline and aircraft type with all
+        its liveries as alternatives. With standard_only the special liveries are left out, unless the
+        airline has nothing but special liveries for that type (see create_vmr.py)."""
+        groups = {}
+        for livery in self.liveries.values():
+            if not livery["type"] or "&" in livery["id"]:
+                continue
+            groups.setdefault((livery["airline"], livery["type"]), []).append(livery)
+        rules = []
+        for (airline, type_code), liveries in groups.items():
+            if standard_only:
+                standard = [l for l in liveries if l["standard"]]
+                if standard:
+                    liveries = standard
+            rules.append({"callsign": airline, "type": type_code, "models": [l["id"] for l in liveries]})
+        return rules
+
+    def livery_list_csv(self):
+        """The livery list create_vmr.py writes next to the VMR (<stem>_liveries.csv)."""
+        kept = set()
+        for rule in self.mtl_rules(True):
+            kept.update(rule["models"])
+        lines = ["mtlid;airline;type;texture;name;livery"]
+        for livery in sorted(self.liveries.values(), key=lambda l: (l["airline"], l["type"], l["id"])):
+            if livery["standard"]:
+                kind = "standard"
+            elif livery["id"] in kept:
+                kind = "special (kept, no standard livery)"
+            else:
+                kind = "special"
+            lines.append(";".join([livery["id"], livery["airline"], livery["type"], livery["texture"], livery["name"].replace(";", ","), kind]))
+        return "\n".join(lines) + "\n"
 
 
 def _unquote(value):
@@ -226,58 +246,6 @@ def _unquote(value):
 
 
 # --------------------------------------------------------------------------------------------------
-# MTL catalog (optional, needs an IVAO API key)
-# --------------------------------------------------------------------------------------------------
-
-class Catalog:
-    """Looks up the numeric id of a livery in the IVAO API so that the picture from the MTL catalog can be shown."""
-
-    def __init__(self):
-        self.cache = {}
-        self.lock = threading.Lock()
-
-    def image_url(self, texture_name, api_key):
-        if not api_key:
-            return None
-        with self.lock:
-            if texture_name in self.cache:
-                return self.cache[texture_name]
-        query = urllib.parse.urlencode({"page": 1, "perPage": 5, "isActive": "true", "textureName": texture_name})
-        request = urllib.request.Request(IVAO_API + "/v2/aircraftsTextures?" + query, headers={"apiKey": api_key})
-        url = None
-        try:
-            with urllib.request.urlopen(request, timeout=15) as response:
-                data = json.loads(response.read().decode("utf-8"))
-            for item in data.get("items", []):
-                if str(item.get("name", "")).upper() == texture_name.upper():
-                    url = CATALOG_IMAGE.format(id=item["id"])
-                    break
-            if url is None and data.get("items"):
-                url = CATALOG_IMAGE.format(id=data["items"][0]["id"])
-        except (urllib.error.URLError, ValueError, KeyError) as err:
-            print("Catalog lookup failed for %s: %s" % (texture_name, err))
-            return None
-        with self.lock:
-            self.cache[texture_name] = url
-        return url
-
-
-# --------------------------------------------------------------------------------------------------
-# Settings
-# --------------------------------------------------------------------------------------------------
-
-def load_settings():
-    try:
-        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def save_settings(settings):
-    SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
-
-
-# --------------------------------------------------------------------------------------------------
 # HTTP server
 # --------------------------------------------------------------------------------------------------
 
@@ -285,8 +253,6 @@ class App:
     def __init__(self, models_root, output_dir):
         self.library = Library(models_root)
         self.output_dir = Path(output_dir)
-        self.catalog = Catalog()
-        self.settings = load_settings()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -347,30 +313,24 @@ class Handler(BaseHTTPRequestHandler):
                 "liveries": app.library.summary(),
                 "errors": app.library.errors,
                 "presets": list_presets(),
-                "settings": {"hasApiKey": bool(app.settings.get("apiKey"))},
+                "mtlRules": {"all": app.library.mtl_rules(False), "standard": app.library.mtl_rules(True)},
                 "catalogSearch": CATALOG_SEARCH,
-                "notAvailableImage": NOT_AVAILABLE_IMG,
             })
         elif path == "/api/rescan":
             app.library.scan()
-            self.send_json({"liveries": app.library.summary(), "errors": app.library.errors})
-        elif path.startswith("/api/thumbnail/"):
-            mtl_id = urllib.parse.unquote(path[len("/api/thumbnail/"):])
-            livery = app.library.liveries.get(mtl_id)
-            if livery and livery["thumbnail"]:
-                self.send_file(livery["thumbnail"], cache=True)
-            else:
-                self.send_error(404)
-        elif path.startswith("/api/catalog-image/"):
-            mtl_id = urllib.parse.unquote(path[len("/api/catalog-image/"):])
-            image = app.catalog.image_url(mtl_id, app.settings.get("apiKey"))
-            if image:
-                self.send_response(302)
-                self.send_header("Location", image)
-                self.send_header("Cache-Control", "max-age=3600")
-                self.end_headers()
-            else:
-                self.send_error(404)
+            self.send_json({
+                "liveries": app.library.summary(),
+                "errors": app.library.errors,
+                "mtlRules": {"all": app.library.mtl_rules(False), "standard": app.library.mtl_rules(True)},
+            })
+        elif path == "/api/livery-list.csv":
+            body = app.library.livery_list_csv().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", 'attachment; filename="ivaomtl_liveries.csv"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/api/parse-vmr":
             # ?file=<path> reads a VMR file from disk (for example an existing custom VMR)
             file_path = query.get("file", [""])[0]
@@ -398,23 +358,20 @@ class Handler(BaseHTTPRequestHandler):
             if not name.lower().endswith(".vmr"):
                 name += ".vmr"
             target = app.output_dir / name
+            written = []
             try:
                 app.output_dir.mkdir(parents=True, exist_ok=True)
                 target.write_text(build_vmr(data.get("rules", []), data.get("comment")), encoding="utf-8", newline="")
+                written.append(str(target.resolve()))
+                if data.get("liveryList"):
+                    # Like create_vmr.py: the list of liveries next to the VMR, with their catalog names.
+                    csv_target = target.with_name(target.stem + "_liveries.csv")
+                    csv_target.write_text(app.library.livery_list_csv(), encoding="utf-8", newline="")
+                    written.append(str(csv_target.resolve()))
             except OSError as err:
                 self.send_json({"error": "Could not write %s: %s" % (target, err)}, 500)
                 return
-            self.send_json({"path": str(target.resolve())})
-        elif path == "/api/settings":
-            if "apiKey" in data:
-                app.settings["apiKey"] = data["apiKey"].strip()
-                app.catalog.cache.clear()
-            try:
-                save_settings(app.settings)
-            except OSError as err:
-                self.send_json({"error": "Could not save settings: %s" % err}, 500)
-                return
-            self.send_json({"hasApiKey": bool(app.settings.get("apiKey"))})
+            self.send_json({"path": written[0], "files": written})
         else:
             self.send_error(404)
 
