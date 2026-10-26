@@ -69,10 +69,16 @@ jobs:
         env:
           IVAO_VMR_GUI_SELFTEST: "1"
         run: |
+          Remove-Item dist\vmr_gui.log -ErrorAction SilentlyContinue
           $p = Start-Process -FilePath dist\IVAO_VMR_Generator.exe -ArgumentList "--port","8766" -PassThru
           $p.WaitForExit(60000) | Out-Null
-          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; throw "the window did not close by itself" }
+          Write-Host "--- vmr_gui.log ---"
           if (Test-Path dist\vmr_gui.log) { Get-Content dist\vmr_gui.log }
+          Write-Host "-------------------"
+          if (-not $p.HasExited) {
+            Get-Process IVAO_VMR_Generator -ErrorAction SilentlyContinue | Stop-Process -Force
+            throw "the window did not close by itself"
+          }
           if ($p.ExitCode -ne 0) { throw "the window self-test failed with exit code $($p.ExitCode)" }
           Write-Host "OK: the application window opened and closed"
 
