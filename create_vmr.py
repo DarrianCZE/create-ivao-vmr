@@ -19,10 +19,14 @@ output_file = "ivaomtl.vmr"
 log_file = "create_vmr.log"
 lib = "ivao"
 pause_at_end = True
+standard_only = False
 # excluded_types = ["A4", "B1", "B2", "BE12", "BE35", "BE36", "BE40", "BE60", "C152", "C172", "C207"]
 
 errored_files = []
 fixed_files = []
+special_titles = set()
+special_skipped = 0
+special_kept = 0
 model_list_len = 0
 texture_len = 0
 airlines_len = 0
@@ -56,8 +60,8 @@ except OSError as err:
     print("Could not create log file " + log_file + ": " + str(err))
 
 argsList = sys.argv[1:]
-options = "d:o:vl:p:n"
-long_options = ['directory=', 'output=', 'verbose', 'library=', 'output-directory=', 'no-pause']
+options = "d:o:vl:p:ns"
+long_options = ['directory=', 'output=', 'verbose', 'library=', 'output-directory=', 'no-pause', 'standard-only']
 
 try:
     arguments, values = getopt.getopt(argsList, options, long_options)
@@ -83,6 +87,8 @@ try:
             output_directory = Path(currentValue)
         elif currentArgument in ("-n", "--no-pause"):
             pause_at_end = False
+        elif currentArgument in ("-s", "--standard-only"):
+            standard_only = True
     
     print("Output to: " + Path(output_directory / output_file).as_posix())
 except getopt.error as err:
@@ -120,6 +126,15 @@ def determine_callsign_prefix(entry):
         else:
             return ""
         
+# Decides whether a texture is a standard airline livery or a special / alternative one.
+# In the IVAO MTL the texture name is the 3-letter ICAO code of the airline (texture="EWG"). Special, retro,
+# alliance, event and other alternative liveries get a number appended (texture="EWG2", "DLH6", ...), which
+# matches the MTLID shown in the MTL catalog (A320EWG = Eurowings, A320EWG2 = Eurowings Europa Park).
+# A texture without any digit in its name is therefore treated as the standard livery.
+def is_standard_livery(texture_name):
+    name = texture_name.strip().strip("\"")
+    return re.search(r"[0-9]", name) is None
+
 # Depending on if we are creating a VMR from the IVAO MTL or the AIG models, the aircraft type is located at a different part of the aircraft.cfg.
 def determine_aircraft_type(config, section):
     global lib
@@ -214,10 +229,14 @@ def create_model_list():
                     global lib
                     if lib == "ivao": texture_title = texture_title.decode('utf-8')
                     callsign_prefix = determine_callsign_prefix(config[section])
+                    texture_name = config[section].get("texture", "")
                 except Exception as err:
                     print(file_to_read + " [" + section + "] could not be read (" + str(err) + "), skipping.")
                     errored_files.append(file_to_read)
                     continue
+                if standard_only and lib == "ivao" and not is_standard_livery(texture_name):
+                    special_titles.add(texture_title)
+                    if verbose: print("  Special livery: " + texture_title + " (texture " + texture_name.strip("\"") + ")")
                 try:
                     model_list[callsign_prefix][acf_type].append(texture_title)
                 except:
@@ -233,11 +252,22 @@ def write_rules(model_list, output):
         airlines_len = airlines_len + 1
 
         for type in model_list[airline]:
+            variants = model_list[airline][type]
+            if standard_only:
+                # Keep only the standard liveries. If an airline has nothing but special liveries for this type,
+                # keep them all: a special livery is still a better match than a generic aircraft.
+                standard_variants = [v for v in variants if v not in special_titles]
+                global special_skipped, special_kept
+                if len(standard_variants) > 0:
+                    special_skipped += len(variants) - len(standard_variants)
+                    variants = standard_variants
+                else:
+                    special_kept += len(variants)
             variant_string = ""
-            for variant in model_list[airline][type]:
+            for variant in variants:
                 if "&" in variant: continue
                 variant_string += variant
-                if variant != model_list[airline][type][-1]:
+                if variant != variants[-1]:
                     variant_string += "//"
             
             if(type.endswith("\"")):
@@ -249,6 +279,11 @@ def write_rules(model_list, output):
 
 def main():
     print("Building VMR for library: " + lib)
+    if standard_only:
+        if lib == "ivao":
+            print("Standard liveries only: special / alternative liveries are left out where a standard livery exists.")
+        else:
+            print("Note: --standard-only only applies to the IVAO library and is ignored for " + lib + ".")
     print("Reading models from: " + os.path.abspath(models_directory))
     if not os.path.isdir(models_directory):
         print("ERROR: the directory " + models_directory + " does not exist.")
@@ -272,6 +307,10 @@ def main():
     print("Processed: " + str(airlines_len) + " airlines.")
     print("Processed: " + str(rules_len) + " rules.")
     print("VMR created: " + Path(output_directory / output_file).as_posix())
+    if standard_only and lib == "ivao":
+        print("Special liveries left out: " + str(special_skipped) + ".")
+        if special_kept > 0:
+            print("Special liveries kept because the airline has no standard livery for that aircraft type: " + str(special_kept) + ".")
     if(len(fixed_files) != 0):
         print("\n\nSome aircraft.cfg files had a broken \"VERSION]\" section header. It was fixed to \"[VERSION]\" so the file could be read:")
         for file in fixed_files:

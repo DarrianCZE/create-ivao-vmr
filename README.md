@@ -64,6 +64,10 @@ Set the output directory for the VMR. The default location is the normal vPilot 
 `-v | -verbose`  
 More verbose logging of what's going on. Get a real sense of speed. Makes you feel like your computer is super duper fast.
 
+`-s | --standard-only`  
+Only use the standard livery of each airline. The IVAO MTL contains many special, retro, alliance and event liveries (in the [MTL catalog](https://mtl.ivao.aero/catalog) these have a number at the end of the MTLID, for example `A320EWG2` = Eurowings Europa Park, while `A320EWG` is the normal Eurowings livery). vPilot picks one of the listed models at random, so an airline with one standard and three special liveries shows up in a special livery most of the time. With this option the special liveries are left out, so aircraft appear in the normal colours of their airline.  
+If an airline only has special liveries for a given aircraft type, those are kept, because a special livery is still a better match than a generic aircraft. The script prints how many liveries were left out and how many were kept for this reason. This option only applies to the IVAO library.
+
 `-n | --no-pause`  
 By default the script waits for you to press Enter before it closes, so the output can be read when the script is started by double-clicking it. Use this option to skip the pause (for example when running the script from a batch file).
 
