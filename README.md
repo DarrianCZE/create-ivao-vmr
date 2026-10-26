@@ -18,7 +18,7 @@ Both generate exactly the same rules from the MTL.
 ## IVAO VMR Generator (GUI)
 
 ### Start it
-**Portable .exe (no Python, no installation):** download `IVAO_VMR_Generator.exe` from the [releases](https://github.com/vojta48/create-ivao-vmr/releases), put it into your `IVAO_MTL` folder and double-click it. The program opens in its own window, using the Microsoft Edge WebView2 runtime that is part of Windows 10 and 11. Release builds are code signed (see [Code signing policy](#code-signing-policy)). A build you take from a workflow run under *Actions* is not signed, so Windows SmartScreen may warn about an unknown publisher; use such a file only if you trust where it came from.
+**Portable .exe (no Python, no installation):** download `IVAO_VMR_Generator.exe` from the [releases](https://github.com/vojta48/create-ivao-vmr/releases), put it into your `IVAO_MTL` folder and double-click it. The program opens in its own window, using the Microsoft Edge WebView2 runtime that is part of Windows 10 and 11. The version is shown next to the title. Release builds are code signed (see [Code signing policy](#code-signing-policy)). A build you take from a workflow run under *Actions* is not signed, so Windows SmartScreen may warn about an unknown publisher; use such a file only if you trust where it came from.
 
 **From source:** put `create_vmr.py`, `vmr_gui.py`, the `gui` folder and the `presets` folder into your `IVAO_MTL` folder and run `python vmr_gui.py` (requires [Python](https://www.python.org/) 3). With `pip install pywebview` it opens in its own window; without it, it opens in your browser at http://127.0.0.1:8765.
 
@@ -38,11 +38,13 @@ The VMR is put together from three parts, in this order. vPilot uses the first r
    Click a livery in the right column to add it to the rule you are editing. You can also import the rules of an existing VMR file. Rules with vPilot's `Callsign` (one exact callsign) or `FlightNumberRange` attributes keep them. The GUI warns about liveries that are not installed, and about rules that vPilot would never use because a ticked preset or an earlier rule already has the same callsign and type.
 3. **The rules generated from your MTL**: tick *Add the rules generated from my MTL* and choose *standard liveries only* or *all liveries* (see [How the MTL rules are generated](#how-the-mtl-rules-are-generated)).
 
-The right column lists every livery installed in your MTL with its picture, catalog name, type and airline, and marks special liveries. Search by airline, type, id or name. The ↗ opens a livery in the [MTL catalog](https://mtl.ivao.aero/catalog). If some `aircraft.cfg` files of your MTL cannot be read, the GUI lists them above the liveries. Their liveries are missing until you repair the MTL with the MTL Installer.
+The right column lists every livery installed in your MTL with its picture, catalog name, type and airline, and marks special liveries. Search by airline, type, id or name. The ↗ opens a livery in the [MTL catalog](https://mtl.ivao.aero/catalog). If some `aircraft.cfg` files of your MTL cannot be read, or contain liveries without a type, without a title or with a title another livery already uses, the GUI lists them above the liveries. Those liveries are missing until you repair the MTL with the MTL Installer.
 
 **Save** writes the file to the output folder, or anywhere through *Save as…*. The first time, the output folder is the folder of the program; after that it is the folder you saved to last, and *Save as…* opens there too.
 
-**Your settings are remembered.** The program keeps the name of the VMR, the folder you saved it to, the ticked presets and the MTL choice in `vmr_gui_settings.json` next to it, and starts with them the next time. A new version of the program keeps using that file. The file records which version created it. Only when a version changes the file in a way the old file cannot follow is the old file deleted: the program then shows a message that the settings were from a version that is no longer supported and were reset to the defaults. A damaged settings file is handled the same way. You can delete the file at any time to start from the defaults. Your own rules are kept by the page itself.
+**Your settings are remembered.** The program keeps the name of the VMR, the folder you saved it to, the ticked presets and the MTL choice in `vmr_gui_settings.json` next to it, and starts with them the next time. A new version of the program keeps using that file. The file records which version created it. Only when a version changes the file in a way the old file cannot follow is the old file deleted: the program then shows a message that the settings were from a version that is no longer supported and were reset to the defaults. A damaged settings file is handled the same way. You can delete the file at any time to start from the defaults.
+
+Your own rules (*My rules*) are not part of the settings file. The page keeps them in its browser storage, which the program's window may clear when you close it. To keep them safe, save them as a VMR without the MTL rules and import that file again next time.
 
 **Where the pictures come from.** The thumbnails inside the MTL packages are the same generic picture for every livery, so the GUI shows the pictures from the MTL catalog instead. It finds the catalog number of each livery in the `ivao.ini` that the MTL Installer writes into every texture folder, or in the installer's `mtl.dat`. That number is all the download needs: no IVAO account, no API key. Each picture is downloaded the first time it is shown and kept in the `previews` folder next to the program, so it works offline afterwards. You can delete that folder at any time.
 
@@ -70,7 +72,7 @@ At the end the script prints how many liveries it read, how many special liverie
 | `-p`, `--output-directory <path>` | Folder for all output files (default: the current folder), e.g. `-p "C:\Users\me\Documents\vPilot Files"`. |
 | `-o`, `--output <file>` | Name of the VMR (default: `ivaomtl.vmr`). The standard-only VMR takes its name from it: `-o my.vmr` writes `my.vmr` and `my_standard.vmr`. |
 | `-l`, `--library <ivao\|aig>` | `aig` builds `aig.vmr` from the [Alpha India Group](https://www.alpha-india.net/) AI traffic library instead (run it from the `aig-aitraffic-oci-beta` folder). The standard-only VMR exists for the IVAO MTL only. |
-| `-v`, `--verbose` | Print every file, rule and special livery. |
+| `-v`, `--verbose` | Print every file, rule and special livery, and every livery left out of the VMR. |
 | `-n`, `--no-pause` | Don't wait for Enter at the end (the pause keeps the window open when the script is double-clicked). |
 
 ## How the MTL rules are generated
@@ -122,7 +124,8 @@ If the script cannot write the fix (for example because the file is read-only), 
 
 ## Development
 - Tests: `python -m unittest discover -s tests` (standard library only, no MTL needed; the JavaScript tests also need Node.js). They cover the script, the GUI server and front end, and check that `create_vmr.py` and the GUI generate the same rules. The workflow runs them before every build. To also check against your installed MTL (read-only), set `IVAO_MTL_DIR` to its folder and run `python -m unittest discover -s tests -p test_real_mtl.py -v`. Every change has to come with matching tests; see [AGENTS.md](AGENTS.md#the-test-suite).
-- Build the .exe on Windows: `pip install pyinstaller pywebview`, then `pyinstaller build_exe.spec`. The result is `dist/IVAO_VMR_Generator.exe`. The GitHub Actions workflow `build-exe.yml` builds and smoke tests it on every push and pull request, and attaches it to the release when a `v*` tag is pushed.
+- Build the .exe on Windows: `pip install pyinstaller pywebview`, then `pyinstaller build_exe.spec`. The result is `dist/IVAO_VMR_Generator.exe`. It shows the version `0.0.0` unless you set it first, for example `$env:APP_VERSION = "1.1.0-test"` in PowerShell. Running from source shows `dev`.
+- The GitHub Actions workflow `build-exe.yml` runs the tests, builds the exe and smoke tests it for every pull request and every push to `main`. For a `v*` tag it also has the exe signed and attaches it to the release together with `LICENSE`, `NOTICE` and `THIRD-PARTY-LICENSES.txt`. The version comes from the tag (`v1.1.0` gives `1.1.0`).
 - Notes for contributors and AI coding agents are in [AGENTS.md](AGENTS.md).
 
 ## License

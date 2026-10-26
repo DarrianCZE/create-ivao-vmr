@@ -32,8 +32,16 @@ the VMR tells it which MTL livery to load for a given callsign and aircraft type
 | `tests/` | The `unittest` suite (see [The test suite](#the-test-suite)). It builds a fake MTL in temp folders, so it needs no installed MTL. |
 | `LICENSE`, `NOTICE` | Apache 2.0 (the unmodified text) and the copyright and attribution notice. |
 | `tools/collect_licenses.py`, `tools/licenses/` | Generate `THIRD-PARTY-LICENSES.txt` for the release from the packages bundled into the exe. |
-| `build_exe.spec` | PyInstaller spec for the portable `IVAO_VMR_Generator.exe` (bundles `gui/` and `presets/`). |
+| `build_exe.spec` | PyInstaller spec for the portable `IVAO_VMR_Generator.exe`. It bundles `gui/`, `presets/` and `version.txt`, and writes the Windows version resource. Both versions come from the `APP_VERSION` environment variable (`0.0.0` if not set). |
 | `.github/workflows/build-exe.yml` | CI: tests, then exe build, server and window smoke tests, SignPath signing and release on `v*` tags. |
+
+Files the programs write at run time (all git-ignored, never commit them):
+- next to `vmr_gui.py` or the exe: `vmr_gui_settings.json` (settings, see invariant 10), `vmr_gui.log` (exe only),
+  `previews/` (catalog pictures);
+- in the folder `create_vmr.py` is run from: `create_vmr.log`, plus the VMRs;
+- CI only: `/licenses/` (the generated license files; `tools/licenses/` is source and is committed).
+
+Running the GUI from source in the repository folder therefore creates these files in the repository.
 
 ## Domain knowledge you need
 
@@ -171,7 +179,14 @@ plain, explanatory comment style of the rest of the code.
   A useful check after rule changes: compare `create_vmr` output with `Library.mtl_rules()` on the copy, and
   diff the rule set against the previous `ivaomtl.vmr` to see what changed for users.
 - Build the exe (Windows): `pip install pyinstaller pywebview`, then `pyinstaller build_exe.spec`, which gives `dist/IVAO_VMR_Generator.exe`.
+  Set `APP_VERSION` first (for example `1.1.0-test`) to give a test build a recognisable version; otherwise it is `0.0.0`.
   Never commit `build/`, `dist/`, `previews/` or logs (see `.gitignore`).
+- **Smoke-testing the exe locally:** it is a one-file PyInstaller exe, so it runs as a launcher process plus the
+  real program. `Stop-Process` on the launcher leaves the program running, and it keeps its port and `vmr_gui.log`.
+  Instead, set `IVAO_VMR_GUI_SELFTEST=1`:
+  - with `--no-browser`, the server runs and the program ends by itself after 40 seconds (a watchdog);
+  - without it, the window opens, loads the page and closes (exit code 0 when it worked).
+  The server smoke test in the workflow still uses `Stop-Process`, which is harmless on a CI runner.
 
 ## Style
 
@@ -187,7 +202,19 @@ plain, explanatory comment style of the rest of the code.
 ## Git and releases
 
 - Branch from `main`. Never commit directly to `main`. Open PRs against `vojta48/create-ivao-vmr:main`.
+  In a fork, add the upstream repository as a second remote (`git remote add upstream
+  https://github.com/vojta48/create-ivao-vmr.git`) and fetch it before starting new work.
+- Keep the first line of a commit message under 72 characters. GitHub uses it as the PR title and cuts
+  longer ones. Write the PR description for the reviewer (why, what changed, effect on users, how it was
+  tested) instead of relying on the commit message.
 - CI must be green: the tests, the exe build, and both smoke tests (server and window).
 - Every PR that changes behaviour includes the matching test changes. Reviewers should reject it otherwise.
-- A release is a pushed `v*` tag. CI builds it, SignPath signs it with a manual approval, and it is attached to
-  the GitHub release. `APP_VERSION` comes from the tag. Releases are never built on a developer machine.
+- **Releases:**
+  1. Merge the PR into `vojta48/create-ivao-vmr:main`.
+  2. Push a tag `vX.Y.Z` on that commit. Only there: never tag a fork, because signing and releases are set
+     up only in vojta48's repository.
+  3. CI builds the exe with `APP_VERSION` from the tag, SignPath signs it after a manual approval, and the
+     release gets the exe, `LICENSE`, `NOTICE` and `THIRD-PARTY-LICENSES.txt`.
+  4. Add the release notes, written for users rather than developers, to the GitHub release.
+  Releases are never built on a developer machine. If the settings file format changes in a release, see
+  invariant 10 and say so in the release notes.
