@@ -1,3 +1,5 @@
 vmr_gui_settings.json
 create_vmr.log
 __pycache__/
+build/
+dist/
