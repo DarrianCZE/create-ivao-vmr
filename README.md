@@ -64,6 +64,14 @@ Set the output directory for the VMR. The default location is the normal vPilot 
 `-v | -verbose`  
 More verbose logging of what's going on. Get a real sense of speed. Makes you feel like your computer is super duper fast.
 
+`-s | --standard-only`  
+Only use the standard livery of each airline. The IVAO MTL contains many special, retro, alliance and event liveries next to the normal airline livery. vPilot picks one of the listed models at random, so an airline with one standard and three special liveries shows up in a special livery most of the time. With this option the special liveries are left out, so aircraft appear in the normal colours of their airline.  
+The script uses the livery name from the [MTL catalog](https://mtl.ivao.aero/catalog), which the MTL stores in the `ui_variation` entry of each livery: `Air Canada (ACA)` is the standard livery, `Air Canada (old colors) (ACA)` or `Lufthansa (Star Alliance) (DLH)` are special ones. Descriptions that only name the engines or winglets of the model (`(CFM)`, `(IAE)`, `(WL)`) or say that it is the airline's new scheme (`(NC)`, `(New Colors)`) still count as standard. If a livery has no name, the texture name decides: `EWG` is standard, `EWG2` is special.  
+If an airline only has special liveries for a given aircraft type, those are kept, because a special livery is still a better match than a generic aircraft. The script prints how many liveries were left out and how many were kept for this reason. This option only applies to the IVAO library.
+
+`-L | --livery-list`  
+Also write `ivaomtl_liveries.csv` next to the VMR, with one line per livery: MTL ID, airline, aircraft type, texture, livery name and whether `--standard-only` treats it as standard or special. Useful to check which liveries are left out. This option only applies to the IVAO library.
+
 `-n | --no-pause`  
 By default the script waits for you to press Enter before it closes, so the output can be read when the script is started by double-clicking it. Use this option to skip the pause (for example when running the script from a batch file).
 
