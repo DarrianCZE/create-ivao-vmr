@@ -199,12 +199,16 @@ def create_model_list():
             if "fltsim" in section:
                 global texture_len
                 texture_len = texture_len + 1
-                acf_type = determine_aircraft_type(config, section)
+                try:
+                    acf_type = determine_aircraft_type(config, section)
+                except Exception as err:
+                    print(file_to_read + " [" + section + "] has no readable aircraft type (" + str(err) + "), skipping.")
+                    errored_files.append(file_to_read)
+                    continue
 
                 # TypeCode cannot be blank.
                 if acf_type == "":
-                    print(acf_type)
-                    print(file_to_read + " was malformed, skipping.")
+                    print(file_to_read + " [" + section + "] has an empty aircraft type, skipping.")
                     errored_files.append(file_to_read)
                     continue
 
