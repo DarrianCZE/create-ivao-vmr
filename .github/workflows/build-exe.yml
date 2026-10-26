@@ -1,8 +1,10 @@
 name: Build portable exe
 
+# Builds on every pull request, on main and on v* tags (a push to a feature branch with an open PR
+# would otherwise build twice).
 on:
   push:
-    branches: ["**"]
+    branches: ["main"]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
