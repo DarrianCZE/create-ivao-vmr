@@ -1,7 +1,8 @@
 name: Build portable exe
 
 # Builds on every pull request, on main and on v* tags (a push to a feature branch with an open PR
-# would otherwise build twice).
+# would otherwise build twice). On a v* tag the exe is also signed through SignPath Foundation and
+# attached to the GitHub release.
 on:
   push:
     branches: ["main"]
@@ -11,10 +12,14 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   build:
     runs-on: windows-latest
+    outputs:
+      unsigned-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,7 +30,20 @@ jobs:
       - name: Install PyInstaller
         run: pip install pyinstaller
 
+      - name: Work out the version
+        id: version
+        shell: bash
+        run: |
+          # A v1.2.3 tag becomes product version 1.2.3; any other build is 0.0.0 (a development build).
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build IVAO_VMR_Generator.exe
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
         run: pyinstaller build_exe.spec
 
       - name: Smoke test the exe
@@ -38,19 +56,67 @@ jobs:
             if ($state.presets.Count -lt 1) { throw "no presets bundled" }
             $html = Invoke-WebRequest http://127.0.0.1:8765/ -UseBasicParsing
             if ($html.StatusCode -ne 200) { throw "GUI page not served" }
-            Write-Host "OK: $($state.presets.Count) presets, GUI served"
+            $info = (Get-Item dist\IVAO_VMR_Generator.exe).VersionInfo
+            Write-Host "OK: $($state.presets.Count) presets, GUI served, product $($info.ProductName) $($info.ProductVersion)"
           } finally {
             Stop-Process -Id $p.Id -Force
           }
 
-      - name: Upload exe as workflow artifact
+      # The unsigned exe. SignPath reads this artifact (a zip with the exe inside), so the artifact
+      # configuration in SignPath has to be <zip-file><pe-file path="IVAO_VMR_Generator.exe">...
+      - name: Upload unsigned exe as workflow artifact
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: IVAO_VMR_Generator-unsigned
+          path: dist/IVAO_VMR_Generator.exe
+
+  # Code signing through SignPath Foundation (https://signpath.org), only for release tags.
+  # Each signing request has to be approved by hand in SignPath by an approver of the project.
+  # The job is skipped until the SignPath project exists and the repository variables
+  # SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG and SIGNPATH_SIGNING_POLICY_SLUG and the secret
+  # SIGNPATH_API_TOKEN are set (see "Code signing policy" in the README).
+  sign:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ORGANIZATION_ID != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Submit signing request to SignPath
+        id: signpath
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ needs.build.outputs.unsigned-artifact-id }}
+          wait-for-completion: true
+          # Approving the request by hand can take a while; wait up to 2 hours.
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: signed
+
+      - name: Upload signed exe as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: IVAO_VMR_Generator
-          path: dist/IVAO_VMR_Generator.exe
+          path: signed/IVAO_VMR_Generator.exe
+
+  # Attach the exe to the GitHub release of the tag: the signed one when signing ran, otherwise the
+  # unsigned one (so a release still gets its exe before SignPath is set up).
+  release:
+    needs: [build, sign]
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.build.result == 'success' && needs.sign.result != 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the exe
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.sign.result == 'success' && 'IVAO_VMR_Generator' || 'IVAO_VMR_Generator-unsigned' }}
+          path: release
 
       - name: Attach exe to the release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/IVAO_VMR_Generator.exe
+          files: release/IVAO_VMR_Generator.exe
+          body: ${{ needs.sign.result == 'success' && 'IVAO_VMR_Generator.exe is signed by SignPath Foundation (free code signing provided by SignPath.io).' || 'IVAO_VMR_Generator.exe in this release is not code signed.' }}
+          append_body: true
