@@ -186,7 +186,13 @@ def create_model_list():
         try:
             if verbose: print("Reading " + file_to_read + "...")
             fix_version_section(file_to_read)
-            config.read(file_to_read)
+            # MTL files are UTF-8 (sometimes with a BOM); a few older ones use a Windows code page instead.
+            # Try UTF-8 first and fall back to cp1252, independent of the locale the script runs under.
+            try:
+                config.read(file_to_read, encoding="utf-8-sig")
+            except UnicodeDecodeError:
+                config = configparser.ConfigParser(strict=False)
+                config.read(file_to_read, encoding="cp1252")
         except configparser.Error as err:
             print(err)
             errored_files.append(file_to_read)
@@ -199,12 +205,16 @@ def create_model_list():
             if "fltsim" in section:
                 global texture_len
                 texture_len = texture_len + 1
-                acf_type = determine_aircraft_type(config, section)
+                try:
+                    acf_type = determine_aircraft_type(config, section)
+                except Exception as err:
+                    print(file_to_read + " [" + section + "] has no readable aircraft type (" + str(err) + "), skipping.")
+                    errored_files.append(file_to_read)
+                    continue
 
                 # TypeCode cannot be blank.
                 if acf_type == "":
-                    print(acf_type)
-                    print(file_to_read + " was malformed, skipping.")
+                    print(file_to_read + " [" + section + "] has an empty aircraft type, skipping.")
                     errored_files.append(file_to_read)
                     continue
 
