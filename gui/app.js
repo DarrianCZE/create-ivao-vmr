@@ -83,11 +83,23 @@
     return el("a", { href: state.catalogSearch.replace("{name}", encodeURIComponent(mtlId)), target: "_blank", rel: "noreferrer", title: "Open " + mtlId + " in the MTL catalog" }, text);
   }
 
-  // A small label for one model of a rule: its id (linked to the MTL catalog) and its livery name.
+  // The picture of a livery from the MTL catalog, served (and cached) by vmr_gui.py. Liveries that were
+  // not installed by the MTL Installer have no catalog number, and without network there is no picture:
+  // the <img> is simply removed then.
+  function preview(livery, cls, fallback) {
+    if (!livery || !livery.catalogId) return fallback || null;
+    const img = el("img", { class: cls, src: "/api/preview/" + encodeURIComponent(livery.id), alt: "", loading: "lazy" });
+    img.addEventListener("error", () => (fallback ? img.replaceWith(fallback) : img.remove()));
+    return img;
+  }
+
+  // A small label for one model of a rule: its picture, its id (linked to the MTL catalog) and its livery name.
   function modelChip(mtlId) {
     const livery = state.liveries.get(mtlId);
     const missing = state.liveries.size > 0 && !livery;
     const chip = el("span", { class: "chip" + (missing ? " missing" : ""), title: missing ? "Not installed in your MTL" : (livery && livery.name) || mtlId }, catalogLink(mtlId, mtlId + " ↗"));
+    const img = preview(livery, "thumb");
+    if (img) chip.prepend(img);
     if (livery && livery.name) chip.append(" ", el("span", { class: "muted" }, livery.name));
     if (missing) chip.append(" ", el("span", { class: "muted" }, "(not installed)"));
     return chip;
@@ -297,6 +309,7 @@
       link.className = "catalog";
       link.addEventListener("click", (e) => e.stopPropagation());
       card.append(
+        preview(livery, "picture", el("div", { class: "picture none" }, "no picture")),
         el("div", { class: "head" }, el("div", { class: "id" }, livery.id), link),
         el("div", { class: "name" + (livery.standard ? "" : " special") }, livery.name || livery.model),
         el("div", { class: "meta" }, livery.type + " · " + (livery.airline || "any airline") + (livery.standard ? "" : " · special livery"))
