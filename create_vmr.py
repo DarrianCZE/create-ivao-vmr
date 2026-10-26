@@ -19,9 +19,10 @@ output_file = "ivaomtl.vmr"
 log_file = "create_vmr.log"
 lib = "ivao"
 pause_at_end = True
-standard_only = False
-livery_list = False
-livery_list_file = "ivaomtl_liveries.csv"
+# For the IVAO library the script writes three files next to each other:
+#   <output_file>            the complete VMR with every livery
+#   <stem>_standard.vmr      the VMR with the standard airline liveries only
+#   <stem>_liveries.csv      the list of all liveries with their names
 # excluded_types = ["A4", "B1", "B2", "BE12", "BE35", "BE36", "BE40", "BE60", "C152", "C172", "C207"]
 
 errored_files = []
@@ -64,8 +65,8 @@ except OSError as err:
     print("Could not create log file " + log_file + ": " + str(err))
 
 argsList = sys.argv[1:]
-options = "d:o:vl:p:nsL"
-long_options = ['directory=', 'output=', 'verbose', 'library=', 'output-directory=', 'no-pause', 'standard-only', 'livery-list']
+options = "d:o:vl:p:n"
+long_options = ['directory=', 'output=', 'verbose', 'library=', 'output-directory=', 'no-pause']
 
 try:
     arguments, values = getopt.getopt(argsList, options, long_options)
@@ -91,10 +92,6 @@ try:
             output_directory = Path(currentValue)
         elif currentArgument in ("-n", "--no-pause"):
             pause_at_end = False
-        elif currentArgument in ("-s", "--standard-only"):
-            standard_only = True
-        elif currentArgument in ("-L", "--livery-list"):
-            livery_list = True
     
     print("Output to: " + Path(output_directory / output_file).as_posix())
 except getopt.error as err:
@@ -277,10 +274,10 @@ def create_model_list():
                     print(file_to_read + " [" + section + "] could not be read (" + str(err) + "), skipping.")
                     errored_files.append(file_to_read)
                     continue
-                if lib == "ivao" and (standard_only or livery_list):
+                if lib == "ivao":
                     standard = is_standard_livery(texture_name, ui_variation)
                     livery_info[texture_title] = (callsign_prefix, acf_type, texture_name.strip("\""), ui_variation.strip("\""), standard)
-                    if standard_only and not standard:
+                    if not standard:
                         special_titles.add(texture_title)
                         if verbose: print("  Special livery: " + texture_title + " (" + ui_variation.strip("\"") + ")")
                 try:
@@ -292,10 +289,11 @@ def create_model_list():
 
 # Goes through the models_list and writes the rules to the output file.
 # Some airlines have multiple available textures for a single type. These are combined into one entry and the ModelNames are separated with "//"
-def write_rules(model_list, output):
+# With standard_only, the special liveries are left out (see is_standard_livery).
+def write_rules(model_list, output, standard_only):
     for airline in model_list:
         global airlines_len
-        airlines_len = airlines_len + 1
+        if not standard_only: airlines_len = airlines_len + 1
 
         for type in model_list[airline]:
             variants = model_list[airline][type]
@@ -320,11 +318,21 @@ def write_rules(model_list, output):
             if(type.endswith("\"")):
                 type = type[:-1]
             output.write(build_rule(airline, type, variant_string))
-            if verbose: print("Created rule for airline " + airline + " type " + type)
+            if verbose and not standard_only: print("Created rule for airline " + airline + " type " + type)
             global rules_len
-            rules_len = rules_len + 1
+            if not standard_only: rules_len = rules_len + 1
 
-# Writes a CSV with every livery, its name from the catalog and whether --standard-only treats it as standard,
+# Writes one VMR file.
+def write_vmr(model_list, path, standard_only):
+    output = open(path, "w")
+    output.write("<?xml version=\"1.0\" encoding=\"utf-8\"?> \n")
+    output.write("<ModelMatchRuleSet> \n")
+    write_rules(model_list, output, standard_only)
+    output.write("</ModelMatchRuleSet> \n")
+    output.write("<!-- VMR created by create-ivao-vmr https://github.com/andrewward2001/create-ivao-vmr -->")
+    output.close()
+
+# Writes a CSV with every livery, its name from the catalog and whether the standard-only VMR treats it as standard,
 # special, or special-but-kept (the airline has no standard livery for that type).
 def write_livery_list(path):
     with open(path, "w", encoding="utf-8", newline="") as f:
@@ -338,11 +346,6 @@ def write_livery_list(path):
 
 def main():
     print("Building VMR for library: " + lib)
-    if standard_only:
-        if lib == "ivao":
-            print("Standard liveries only: special / alternative liveries are left out where a standard livery exists.")
-        else:
-            print("Note: --standard-only only applies to the IVAO library and is ignored for " + lib + ".")
     print("Reading models from: " + os.path.abspath(models_directory))
     if not os.path.isdir(models_directory):
         print("ERROR: the directory " + models_directory + " does not exist.")
@@ -353,31 +356,28 @@ def main():
     model_list = create_model_list()
 
     output_directory.mkdir(parents=True, exist_ok=True)
-    output = open(output_directory / output_file, "w")
-    output.write("<?xml version=\"1.0\" encoding=\"utf-8\"?> \n")
-    output.write("<ModelMatchRuleSet> \n")
-    write_rules(model_list, output)
-    output.write("</ModelMatchRuleSet> \n")
-    output.write("<!-- VMR created by create-ivao-vmr https://github.com/andrewward2001/create-ivao-vmr -->")
-    output.close()
+    write_vmr(model_list, output_directory / output_file, False)
+    if lib == "ivao":
+        stem = Path(output_file).stem
+        standard_file = stem + "_standard" + Path(output_file).suffix
+        livery_list_file = stem + "_liveries.csv"
+        write_vmr(model_list, output_directory / standard_file, True)
     print("\n\nDone!")
     print("Processed: " + str(model_list_len) + " models.")
     print("Processed: " + str(texture_len) + " textures.")
     print("Processed: " + str(airlines_len) + " airlines.")
     print("Processed: " + str(rules_len) + " rules.")
     print("VMR created: " + Path(output_directory / output_file).as_posix())
-    if standard_only and lib == "ivao":
-        print("Special liveries left out: " + str(special_skipped) + ".")
+    if lib == "ivao":
+        print("Standard liveries only VMR created: " + Path(output_directory / standard_file).as_posix())
+        print("  Special liveries left out: " + str(special_skipped) + ".")
         if special_kept > 0:
-            print("Special liveries kept because the airline has no standard livery for that aircraft type: " + str(special_kept) + ".")
-    if livery_list and lib == "ivao":
+            print("  Special liveries kept because the airline has no standard livery for that aircraft type: " + str(special_kept) + ".")
         try:
             write_livery_list(output_directory / livery_list_file)
             print("Livery list created: " + Path(output_directory / livery_list_file).as_posix())
         except OSError as err:
             print("Could not write the livery list " + livery_list_file + ": " + str(err))
-    elif livery_list:
-        print("Note: --livery-list only applies to the IVAO library and is ignored for " + lib + ".")
     if(len(fixed_files) != 0):
         print("\n\nSome aircraft.cfg files had a broken \"VERSION]\" section header. It was fixed to \"[VERSION]\" so the file could be read:")
         for file in fixed_files:
