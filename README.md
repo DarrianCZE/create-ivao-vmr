@@ -13,11 +13,11 @@ Make sure to [download](https://mtl.ivao.aero/installer), install, and index the
 Drop the `create_vmr.py` file in your `Packages/Community/IVAO_MTL` folder.  
 Open a Windows Terminal and enter `python create_vmr.py`.  
 Wait for the script to finish. It should only take a few seconds (less than two for me).  
-The script creates three files in your `Documents/vPilot Files` folder:
+The script creates three files:
 
-- `ivaomtl.vmr`: the complete VMR with every livery in the MTL.
-- `ivaomtl_standard.vmr`: the same rules, but with only the standard livery of each airline. The IVAO MTL contains many special, retro, alliance and event liveries next to the normal airline livery. vPilot picks one of the listed models at random, so an airline with one standard and three special liveries shows up in a special livery most of the time. In this VMR the special liveries are left out, so aircraft appear in the normal colours of their airline. Use either this file or `ivaomtl.vmr` in vPilot, not both.
-- `ivaomtl_liveries.csv`: one line per livery with the MTL ID, airline, aircraft type, texture, livery name and whether the standard-only VMR treats it as standard or special. Useful to check which liveries are left out.
+- `ivaomtl.vmr` in your `Documents/vPilot Files` folder: the complete VMR with every livery in the MTL.
+- `ivaomtl_standard.vmr` in the folder you run the script from: the same rules, but with only the standard livery of each airline. The IVAO MTL contains many special, retro, alliance and event liveries next to the normal airline livery. vPilot picks one of the listed models at random, so an airline with one standard and three special liveries shows up in a special livery most of the time. In this VMR the special liveries are left out, so aircraft appear in the normal colours of their airline. Use either this file or `ivaomtl.vmr` in vPilot, not both.
+- `ivaomtl_liveries.csv` in the folder you run the script from: one line per livery with the MTL ID, airline, aircraft type, texture, livery name and whether the standard-only VMR treats it as standard or special. Useful to check which liveries are left out.
 
 The standard livery is recognised by its name from the [MTL catalog](https://mtl.ivao.aero/catalog), which the MTL stores in the `ui_variation` entry of each livery: `Air Canada (ACA)` is the standard livery, `Air Canada (old colors) (ACA)` or `Lufthansa (Star Alliance) (DLH)` are special ones. Descriptions that only name the engines or winglets of the model (`(CFM)`, `(IAE)`, `(WL)`) or say that it is the airline's new scheme (`(NC)`, `(New Colors)`) still count as standard. If a livery has no name, the texture name decides: `EWG` is standard, `EWG2` is special. If an airline only has special liveries for a given aircraft type, those are kept, because a special livery is still a better match than a generic aircraft. The script prints how many liveries were left out and how many were kept for this reason.  
 
@@ -61,11 +61,11 @@ Set which model-matching library you're using. Default is IVAO MTL. Use "aig" fo
 # python create_vmr.py -o ivaomtl.vmr
 ```
 Specify the output of the script. If you specify a directory, make sure to wrap it in quotation marks.  
-For the IVAO library the standard-only VMR and the livery list take their names from this file: `-o my.vmr` creates `my.vmr`, `my_standard.vmr` and `my_liveries.csv`.  
+For the IVAO library the standard-only VMR and the livery list take their names from this file: `-o my.vmr` creates `my.vmr`, `my_standard.vmr` and `my_liveries.csv`. The last two are always written to the folder you run the script from.  
 
 
 `-p | --output-directory` default: ~/Documents/vPilot Files  
-Set the output directory for the VMR. The default location is the normal vPilot Files directory. Ensure you wrap the entire path in "quotation marks".
+Set the output directory for the VMR. The default location is the normal vPilot Files directory. Ensure you wrap the entire path in "quotation marks". The standard-only VMR and the livery list are not affected: they are always written to the folder you run the script from.
  
 
 `-v | -verbose`  
