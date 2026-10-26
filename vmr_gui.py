@@ -33,10 +33,18 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-GUI_DIR = SCRIPT_DIR / "gui"
-PRESETS_DIR = SCRIPT_DIR / "presets"
-SETTINGS_FILE = SCRIPT_DIR / "vmr_gui_settings.json"
+# When packed into an .exe with PyInstaller (see build_exe.spec), the gui and presets folders are bundled
+# inside the executable and unpacked to a temporary folder (sys._MEIPASS). Files the user edits or that
+# the GUI writes (own presets, the settings, the generated VMRs) live next to the .exe instead.
+FROZEN = getattr(sys, "frozen", False)
+APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
+BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
+GUI_DIR = BUNDLE_DIR / "gui"
+PRESETS_DIRS = [BUNDLE_DIR / "presets", APP_DIR / "presets"]  # a preset next to the exe replaces a bundled one of the same name
+SETTINGS_FILE = APP_DIR / "vmr_gui_settings.json"
+# The script works in the folder it is run from, like create_vmr.py. The .exe works in its own folder,
+# because Windows does not always start a double-clicked program in the folder it lies in.
+DEFAULT_DIR = str(APP_DIR) if FROZEN else "."
 
 # The MTL catalog (https://mtl.ivao.aero/catalog) shows the picture of a livery from this address.
 # The numeric id of a texture comes from the IVAO API, which needs an API key (see settings in the GUI).
@@ -102,10 +110,13 @@ def _xml_attr(value):
 
 
 def list_presets():
+    files = {}
+    for folder in PRESETS_DIRS:
+        if folder.is_dir():
+            for path in folder.glob("*.vmr"):
+                files[path.stem] = path
     presets = []
-    if not PRESETS_DIR.is_dir():
-        return presets
-    for path in sorted(PRESETS_DIR.glob("*.vmr")):
+    for path in sorted(files.values(), key=lambda p: p.stem.lower()):
         text = _read_text(path)
         description = ""
         comment = re.search(r"<!--(.*?)-->", text, re.S)
@@ -405,14 +416,18 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description="GUI for building a custom vPilot VMR on top of the IVAO MTL.")
-    parser.add_argument("-d", "--directory", default=".", help="folder that contains SimObjects/Airplanes (default: current folder)")
-    parser.add_argument("-p", "--output-directory", default=".", help="folder where VMR files are saved (default: current folder)")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("-d", "--directory", default=DEFAULT_DIR, help="folder that contains SimObjects/Airplanes (default: %s)" % ("the folder of the .exe" if FROZEN else "current folder"))
+    parser.add_argument("-p", "--output-directory", default=DEFAULT_DIR, help="folder where VMR files are saved (default: the same folder)")
+    parser.add_argument("--port", type=int, default=8765, help="port of the local server (default: 8765, a free port is used if it is taken)")
     parser.add_argument("--no-browser", action="store_true", help="do not open the browser automatically")
     args = parser.parse_args()
 
     Handler.app = App(args.directory, args.output_directory)
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    except OSError:
+        # The port is taken (for example by a second copy of the GUI): let the system pick a free one.
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     url = "http://127.0.0.1:%d/" % server.server_address[1]
     print("IVAO VMR generator GUI")
     print("  Models folder: " + os.path.abspath(args.directory))
@@ -427,4 +442,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        if FROZEN:
+            # Keep the console window open so the error can be read when the .exe was double-clicked.
+            try:
+                input("\nPress Enter to close this window...")
+            except EOFError:
+                pass
+        sys.exit(1)

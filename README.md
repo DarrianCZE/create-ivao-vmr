@@ -77,7 +77,9 @@ By default the script waits for you to press Enter before it closes, so the outp
 ## GUI: build your own VMR with presets and previews
 `vmr_gui.py` is a small graphical front end for building a *custom* VMR that you place **before** the IVAO MTL VMR in vPilot. It is meant for the rules the MTL-generated file does not contain: airline groups that share liveries (for example the Smartwings group flying Czech Airlines colours), wet-lease operators, or liveries you want to see instead of the default one.
 
-Drop `vmr_gui.py`, the `gui` folder and the `presets` folder into your `Packages/Community/IVAO_MTL` folder (next to `create_vmr.py`) and run:
+**Portable .exe (no Python, no installation):** download `IVAO_VMR_Generator.exe` from the [releases](https://github.com/vojta48/create-ivao-vmr/releases) (or from the *Build portable exe* run under *Actions*), put it into your `Packages/Community/IVAO_MTL` folder and double-click it. The GUI opens in your browser; a console window shows the address and stays open while the GUI runs. The `gui` and `presets` folders are packed inside the .exe. To add your own presets, create a `presets` folder next to the .exe and put your `.vmr` files there. Windows SmartScreen may warn about an unknown publisher because the file is not signed; choose *More info → Run anyway*.
+
+**From source:** drop `vmr_gui.py`, the `gui` folder and the `presets` folder into your `Packages/Community/IVAO_MTL` folder (next to `create_vmr.py`) and run:
 ```
 python vmr_gui.py
 ```
@@ -90,7 +92,9 @@ It needs nothing but Python. A small local web server starts and the GUI opens i
 
 Previews are the thumbnails that ship with the MTL packages. If you have an IVAO API key, enter it in *Settings* in the GUI and the pictures from the [MTL catalog](https://mtl.ivao.aero/catalog) are shown instead (the key is stored in `vmr_gui_settings.json` next to the script, do not share that file). Clicking a preview opens the livery in the MTL catalog.
 
-Options: `-d` the folder that contains `SimObjects/Airplanes` (default: the current folder), `-p` the output folder, `--port` the port of the local server, `--no-browser` to not open the browser.
+Options: `-d` the folder that contains `SimObjects/Airplanes` (default: the current folder, for the .exe the folder it lies in), `-p` the output folder, `--port` the port of the local server, `--no-browser` to not open the browser.
+
+Building the .exe yourself: `pip install pyinstaller` and `pyinstaller build_exe.spec` on Windows; the result is `dist/IVAO_VMR_Generator.exe`. The GitHub Actions workflow `build-exe.yml` does the same on every push and attaches the file to the release when a `v*` tag is pushed.
 
 ## Log file
 Everything the script prints is also written to `create_vmr.log` in the folder the script is run from. If the script crashes, the full error is in that file. Please attach it when reporting a problem.
