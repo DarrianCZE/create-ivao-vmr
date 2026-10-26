@@ -11,7 +11,8 @@
 #   - add the rules generated from your MTL (the same rules create_vmr.py makes, all liveries or the
 #     standard liveries only) after your own rules, so that one VMR file is enough in vPilot,
 #   - save the result as a VMR file.
-# Every livery links to its page in the MTL catalog (https://mtl.ivao.aero/catalog).
+# Every livery shows its picture from the MTL catalog (https://mtl.ivao.aero/catalog) and links to its page
+# there. The pictures are downloaded once into the "previews" folder next to the program.
 #
 # Options:
 #   -d | --directory [path]   folder that contains SimObjects/Airplanes (default: the current folder)
@@ -28,7 +29,9 @@ import os
 import re
 import sys
 import threading
+import urllib.error
 import urllib.parse
+import urllib.request
 import webbrowser
 import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -53,10 +56,16 @@ DEFAULT_DIR = str(APP_DIR) if FROZEN else "."
 # Set by the build workflow: open the window, close it again after a few seconds and exit.
 SELF_TEST = os.environ.get("IVAO_VMR_GUI_SELFTEST") == "1"
 
-# Page of a livery in the MTL catalog (https://mtl.ivao.aero/catalog). Pictures of the liveries are not
-# shown: the thumbnails in the MTL are one generic picture for every livery, and the catalog pictures
-# can only be found through the IVAO API, which needs an API key.
+# Page of a livery in the MTL catalog (https://mtl.ivao.aero/catalog).
 CATALOG_SEARCH = "https://mtl.ivao.aero/catalog?textureName={name}"
+# Picture of a livery in the MTL catalog. The thumbnails inside the MTL packages are one generic picture
+# for every livery, but the MTL Installer writes an "ivao.ini" into every texture folder it installs, and
+# its "mtl_version" is the number of the livery in the catalog. With it the catalog picture can be
+# downloaded without an API key. The pictures are kept in the "previews" folder next to the program, so
+# that each one is downloaded only once.
+CATALOG_IMAGE = "https://download.ivao.aero/v2/aircraftsTextures/{id}/files/latest/image"
+PREVIEWS_DIR = APP_DIR / "previews"
+TEXTURE_INFO_FILE = "ivao.ini"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -171,6 +180,14 @@ class Library:
         return self
 
     def _read_cfg(self, model_dir, cfg):
+        # texture="TVS" in aircraft.cfg means the folder texture.TVS, but Windows does not care about case
+        folders = {}
+        try:
+            for child in model_dir.iterdir():
+                if child.name.lower().startswith("texture.") and child.is_dir():
+                    folders[child.name[len("texture."):].lower()] = child
+        except OSError:
+            pass
         config = configparser.ConfigParser(strict=False, interpolation=None)
         try:
             try:
@@ -198,6 +215,7 @@ class Library:
                 "name": name,
                 "model": model_dir.name,
                 "standard": is_standard_livery(texture, name),
+                "catalogId": read_catalog_id(folders.get(texture.lower())),
             }
 
     def summary(self):
@@ -246,6 +264,81 @@ def _unquote(value):
 
 
 # --------------------------------------------------------------------------------------------------
+# Livery pictures from the MTL catalog
+# --------------------------------------------------------------------------------------------------
+
+def read_catalog_id(texture_dir):
+    """The number of a livery in the MTL catalog, from the ivao.ini the MTL Installer put into its
+    texture folder ("[IVAO] mtl_version = 18552"). None when the folder was not installed by the installer."""
+    if texture_dir is None:
+        return None
+    info = texture_dir / TEXTURE_INFO_FILE
+    try:
+        text = info.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return None
+    match = re.search(r"^\s*mtl_version\s*=\s*(\d+)\s*$", text, re.MULTILINE | re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+class Previews:
+    """Downloads the catalog picture of a livery once and keeps it in the previews folder."""
+
+    EXTENSIONS = {"image/png": ".png", "image/webp": ".webp", "image/jpeg": ".jpg", "image/gif": ".gif"}
+
+    def __init__(self, folder):
+        self.folder = Path(folder)
+        self.failed = {}  # catalog id -> error text, so that an unreachable picture is not tried over and over
+        self.lock = threading.Lock()
+        self.locks = {}  # catalog id -> lock, so that two requests for the same picture download it once
+        self.downloads = threading.BoundedSemaphore(4)  # at most four downloads at a time
+
+    def cached(self, catalog_id):
+        for ext in self.EXTENSIONS.values():
+            path = self.folder / ("%d%s" % (catalog_id, ext))
+            if path.is_file():
+                return path
+        return None
+
+    def get(self, catalog_id):
+        """The picture file of a livery, or None when it is not available (no network, not in the catalog)."""
+        path = self.cached(catalog_id)
+        if path:
+            return path
+        with self.lock:
+            if catalog_id in self.failed:
+                return None
+            lock = self.locks.setdefault(catalog_id, threading.Lock())
+        with lock:
+            path = self.cached(catalog_id)
+            if path:
+                return path
+            try:
+                with self.downloads:
+                    path = self._download(catalog_id)
+            except (urllib.error.URLError, OSError, ValueError) as err:
+                with self.lock:
+                    self.failed[catalog_id] = str(err)
+                print("Catalog picture %d not available: %s" % (catalog_id, err))
+                return None
+        return path
+
+    def _download(self, catalog_id):
+        request = urllib.request.Request(CATALOG_IMAGE.format(id=catalog_id), headers={"User-Agent": "create-ivao-vmr GUI"})
+        with urllib.request.urlopen(request, timeout=20) as response:
+            content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            if content_type not in self.EXTENSIONS:
+                raise ValueError("not a picture (%s)" % (content_type or "no content type"))
+            data = response.read()
+        self.folder.mkdir(parents=True, exist_ok=True)
+        path = self.folder / ("%d%s" % (catalog_id, self.EXTENSIONS[content_type]))
+        temp = path.with_name(path.name + ".part")
+        temp.write_bytes(data)
+        temp.replace(path)
+        return path
+
+
+# --------------------------------------------------------------------------------------------------
 # HTTP server
 # --------------------------------------------------------------------------------------------------
 
@@ -253,6 +346,7 @@ class App:
     def __init__(self, models_root, output_dir):
         self.library = Library(models_root)
         self.output_dir = Path(output_dir)
+        self.previews = Previews(PREVIEWS_DIR)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -315,6 +409,7 @@ class Handler(BaseHTTPRequestHandler):
                 "presets": list_presets(),
                 "mtlRules": {"all": app.library.mtl_rules(False), "standard": app.library.mtl_rules(True)},
                 "catalogSearch": CATALOG_SEARCH,
+                "previewsDir": str(PREVIEWS_DIR),
             })
         elif path == "/api/rescan":
             app.library.scan()
@@ -323,6 +418,14 @@ class Handler(BaseHTTPRequestHandler):
                 "errors": app.library.errors,
                 "mtlRules": {"all": app.library.mtl_rules(False), "standard": app.library.mtl_rules(True)},
             })
+        elif path.startswith("/api/preview/"):
+            # the catalog picture of a livery (downloaded on first use, then served from the previews folder)
+            livery = app.library.liveries.get(urllib.parse.unquote(path[len("/api/preview/"):]))
+            picture = app.previews.get(livery["catalogId"]) if livery and livery.get("catalogId") else None
+            if picture:
+                self.send_file(picture, cache=True)
+            else:
+                self.send_error(404)
         elif path == "/api/livery-list.csv":
             body = app.library.livery_list_csv().encode("utf-8")
             self.send_response(200)

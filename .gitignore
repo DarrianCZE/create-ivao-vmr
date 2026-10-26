@@ -2,3 +2,4 @@ create_vmr.log
 __pycache__/
 build/
 dist/
+previews/
