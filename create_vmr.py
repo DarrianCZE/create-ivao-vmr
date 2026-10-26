@@ -186,7 +186,13 @@ def create_model_list():
         try:
             if verbose: print("Reading " + file_to_read + "...")
             fix_version_section(file_to_read)
-            config.read(file_to_read)
+            # MTL files are UTF-8 (sometimes with a BOM); a few older ones use a Windows code page instead.
+            # Try UTF-8 first and fall back to cp1252, independent of the locale the script runs under.
+            try:
+                config.read(file_to_read, encoding="utf-8-sig")
+            except UnicodeDecodeError:
+                config = configparser.ConfigParser(strict=False)
+                config.read(file_to_read, encoding="cp1252")
         except configparser.Error as err:
             print(err)
             errored_files.append(file_to_read)
