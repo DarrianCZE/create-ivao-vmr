@@ -74,6 +74,24 @@ More verbose logging of what's going on. Get a real sense of speed. Makes you fe
 `-n | --no-pause`  
 By default the script waits for you to press Enter before it closes, so the output can be read when the script is started by double-clicking it. Use this option to skip the pause (for example when running the script from a batch file).
 
+## GUI: build your own VMR with presets and previews
+`vmr_gui.py` is a small graphical front end for building a *custom* VMR that you place **before** the IVAO MTL VMR in vPilot. It is meant for the rules the MTL-generated file does not contain: airline groups that share liveries (for example the Smartwings group flying Czech Airlines colours), wet-lease operators, or liveries you want to see instead of the default one.
+
+Drop `vmr_gui.py`, the `gui` folder and the `presets` folder into your `Packages/Community/IVAO_MTL` folder (next to `create_vmr.py`) and run:
+```
+python vmr_gui.py
+```
+It needs nothing but Python. A small local web server starts and the GUI opens in your browser (http://127.0.0.1:8765). In the GUI you can:
+
+- **Tick presets**: every `.vmr` file in the `presets` folder is offered as a ready-made rule set. Two are included: `smartwings_group.vmr` (Smartwings, Smartwings Poland/Hungary/Slovakia and Czech Airlines sharing the Smartwings fleet) and `extra_rules.vmr` (liveries missing from the MTL, substituted with a similar one). Add your own `.vmr` files to the folder to offer them as presets; a `<!-- comment -->` in the file is shown as its description.
+- **Write your own rules**: one line per `ModelMatchRule` with the callsign prefix (3-letter airline code, empty for any callsign), the ICAO type and the MTL livery ids. Several liveries are separated with `//`, vPilot then picks one at random. Rules can also be imported from an existing VMR file.
+- **See the liveries**: the right column lists every livery installed in your MTL with its picture and catalog name. Search by airline, type, id or name and click a livery to add it to the rule you are editing. Each rule shows a preview of its liveries, and warns about ids that are not installed.
+- **Save**: the result is written to the folder you run the script from (or `-p`), or downloaded through the browser. Add the file in vPilot under *Settings → Model Matching → Custom Rules* and move it above the IVAO MTL VMR, so that its rules win.
+
+Previews are the thumbnails that ship with the MTL packages. If you have an IVAO API key, enter it in *Settings* in the GUI and the pictures from the [MTL catalog](https://mtl.ivao.aero/catalog) are shown instead (the key is stored in `vmr_gui_settings.json` next to the script, do not share that file). Clicking a preview opens the livery in the MTL catalog.
+
+Options: `-d` the folder that contains `SimObjects/Airplanes` (default: the current folder), `-p` the output folder, `--port` the port of the local server, `--no-browser` to not open the browser.
+
 ## Log file
 Everything the script prints is also written to `create_vmr.log` in the folder the script is run from. If the script crashes, the full error is in that file. Please attach it when reporting a problem.
 
