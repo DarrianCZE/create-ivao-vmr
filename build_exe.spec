@@ -76,7 +76,8 @@ a = Analysis(
     hiddenimports=[],
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tkinter", "unittest", "pydoc", "doctest", "test"],
+    # pywebview pulls in every GUI toolkit it finds on the build machine; only the WebView2 (Edge) backend is used.
+    excludes=["tkinter", "unittest", "pydoc", "doctest", "test", "PyQt5", "PyQt6", "PySide2", "PySide6", "gi", "cefpython3"],
     cipher=block_cipher,
     noarchive=False,
 )
@@ -94,8 +95,9 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    # Keep the console window: it shows the address of the GUI and any error.
-    console=True,
+    # No console window: the GUI runs in its own window (pywebview). What the program prints goes to
+    # vmr_gui.log next to the exe, and a crash is shown in a message box.
+    console=False,
     disable_windowed_traceback=False,
     # The version resource exists on Windows only; PyInstaller ignores it elsewhere.
     version=write_version_file(os.path.join(workpath, "version_info.txt")) if sys.platform == "win32" else None,

@@ -3,8 +3,9 @@
 #
 # Run it from the IVAO MTL folder (Packages/Community/IVAO_MTL), the same place as create_vmr.py:
 #   python vmr_gui.py
-# It starts a small local web server (standard library only, no extra packages) and opens the GUI
-# in your browser. In the GUI you can:
+# It starts a small local web server (standard library only) and shows the GUI in its own window
+# (through pywebview, "pip install pywebview"; without it the GUI opens in your browser instead).
+# In the GUI you can:
 #   - turn on ready-made rule sets from the "presets" folder (for example the Smartwings group),
 #   - add your own ModelMatchRule lines (CallsignPrefix / TypeCode / ModelName, "//" for alternatives),
 #   - see a preview of every livery (local thumbnail from the MTL, or the picture from the MTL catalog),
@@ -14,7 +15,8 @@
 #   -d | --directory [path]   folder that contains SimObjects/Airplanes (default: the current folder)
 #   -p | --output-directory   folder where generated VMR files are saved (default: the current folder)
 #   --port [number]           port of the local server (default: 8765)
-#   --no-browser              do not open the browser automatically
+#   --browser                 show the GUI in the web browser instead of its own window
+#   --no-browser              only run the server, do not open a window or a browser
 
 import argparse
 import configparser
@@ -42,9 +44,12 @@ BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
 GUI_DIR = BUNDLE_DIR / "gui"
 PRESETS_DIRS = [BUNDLE_DIR / "presets", APP_DIR / "presets"]  # a preset next to the exe replaces a bundled one of the same name
 SETTINGS_FILE = APP_DIR / "vmr_gui_settings.json"
+LOG_FILE = APP_DIR / "vmr_gui.log"
 # The script works in the folder it is run from, like create_vmr.py. The .exe works in its own folder,
 # because Windows does not always start a double-clicked program in the folder it lies in.
 DEFAULT_DIR = str(APP_DIR) if FROZEN else "."
+# Set by the build workflow: open the window, close it again after a few seconds and exit.
+SELF_TEST = os.environ.get("IVAO_VMR_GUI_SELFTEST") == "1"
 
 # The MTL catalog (https://mtl.ivao.aero/catalog) shows the picture of a livery from this address.
 # The numeric id of a texture comes from the IVAO API, which needs an API key (see settings in the GUI).
@@ -414,12 +419,72 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
 
+class JsApi:
+    """Functions the page can call through window.pywebview.api when the GUI runs in its own window."""
+
+    def __init__(self):
+        self.window = None
+
+    def save_as(self, file_name, text):
+        """Shows the Windows "Save as" dialog and writes the VMR text to the chosen file."""
+        import webview
+        result = self.window.create_file_dialog(webview.FileDialog.SAVE, save_filename=file_name, file_types=("VMR files (*.vmr)", "All files (*.*)"))
+        if not result:
+            return {"cancelled": True}
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        try:
+            Path(path).write_text(text, encoding="utf-8", newline="")
+        except OSError as err:
+            return {"error": str(err)}
+        return {"path": str(path)}
+
+    def open_file(self):
+        """Shows the "Open" dialog and returns the text of the chosen VMR file."""
+        import webview
+        result = self.window.create_file_dialog(webview.FileDialog.OPEN, file_types=("VMR files (*.vmr)", "All files (*.*)"))
+        if not result:
+            return {"cancelled": True}
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        try:
+            return {"name": Path(path).name, "text": _read_text(path)}
+        except OSError as err:
+            return {"error": str(err)}
+
+
+def show_window(url, server):
+    """Shows the GUI in its own window. Returns False when pywebview is not available."""
+    try:
+        import webview
+    except ImportError as err:
+        print("pywebview is not installed (%s), opening the browser instead." % err)
+        return False
+    api = JsApi()
+    print("  Opening the window (pywebview %s)." % getattr(webview, "__version__", "?"))
+    window = webview.create_window("IVAO VMR generator", url, js_api=api, width=1500, height=950, min_size=(1000, 650))
+    api.window = window
+    window.events.loaded += lambda: print("  Page loaded in the window.")
+    # Used by the build workflow to check that the window really opens: close it again after a moment.
+    if SELF_TEST:
+        def close_soon():
+            import time
+            time.sleep(5)
+            print("  Self-test: closing the window.")
+            window.destroy()
+        webview.start(close_soon)
+    else:
+        webview.start()
+    print("  Window closed.")
+    server.shutdown()
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description="GUI for building a custom vPilot VMR on top of the IVAO MTL.")
     parser.add_argument("-d", "--directory", default=DEFAULT_DIR, help="folder that contains SimObjects/Airplanes (default: %s)" % ("the folder of the .exe" if FROZEN else "current folder"))
     parser.add_argument("-p", "--output-directory", default=DEFAULT_DIR, help="folder where VMR files are saved (default: the same folder)")
     parser.add_argument("--port", type=int, default=8765, help="port of the local server (default: 8765, a free port is used if it is taken)")
-    parser.add_argument("--no-browser", action="store_true", help="do not open the browser automatically")
+    parser.add_argument("--browser", action="store_true", help="show the GUI in the web browser instead of its own window")
+    parser.add_argument("--no-browser", action="store_true", help="only run the server, do not open a window or a browser")
     args = parser.parse_args()
 
     Handler.app = App(args.directory, args.output_directory)
@@ -432,25 +497,66 @@ def main():
     print("IVAO VMR generator GUI")
     print("  Models folder: " + os.path.abspath(args.directory))
     print("  Output folder: " + os.path.abspath(args.output_directory))
-    print("  Open " + url + " in your browser. Press Ctrl+C to stop.")
-    if not args.no_browser:
-        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    print("  GUI address: " + url)
+
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
     try:
-        server.serve_forever()
+        if args.no_browser:
+            print("  Server only (--no-browser). Press Ctrl+C to stop.")
+            server_thread.join()
+        elif not args.browser and show_window(url, server):
+            pass
+        else:
+            if SELF_TEST:
+                raise RuntimeError("The GUI window could not be opened (pywebview missing).")
+            print("  Open " + url + " in your browser. Press Ctrl+C to stop.")
+            webbrowser.open(url)
+            server_thread.join()
     except KeyboardInterrupt:
         print("\nStopped.")
+    finally:
+        server.shutdown()
+
+
+def report_crash(text):
+    """Shows the error when there is no console to print it to (the .exe has none)."""
+    print(text)
+    if sys.platform == "win32" and not SELF_TEST:
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, text + "\n\nThe full log is in " + str(LOG_FILE), "IVAO VMR generator", 0x10)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
+    if FROZEN:
+        # The .exe has no console window: keep what the program prints in a log file next to it.
+        try:
+            sys.stdout = sys.stderr = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+        except OSError:
+            pass
+    if SELF_TEST:
+        # Backstop for the build workflow: never hang around, whatever the window does.
+        def watchdog():
+            import time
+            time.sleep(40)
+            print("  Self-test: watchdog fired, the program did not finish in time.")
+            sys.stdout.flush()
+            os._exit(3)
+        threading.Thread(target=watchdog, daemon=True).start()
+    exit_code = 0
     try:
         main()
     except Exception:
         import traceback
-        traceback.print_exc()
-        if FROZEN:
-            # Keep the console window open so the error can be read when the .exe was double-clicked.
-            try:
-                input("\nPress Enter to close this window...")
-            except EOFError:
-                pass
-        sys.exit(1)
+        report_crash(traceback.format_exc())
+        exit_code = 1
+    # The window toolkit (pywebview, .NET) can leave threads behind that would keep the process alive
+    # after the window is closed; end the process explicitly.
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+    os._exit(exit_code)
