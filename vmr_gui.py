@@ -423,12 +423,15 @@ class JsApi:
     """Functions the page can call through window.pywebview.api when the GUI runs in its own window."""
 
     def __init__(self):
-        self.window = None
+        # Underscore: pywebview exposes every public attribute of this object to the page and walks
+        # it recursively. Walking the Window object (and the .NET form behind it) never finishes and
+        # the page then never gets its window.pywebview.api.
+        self._window = None
 
     def save_as(self, file_name, text):
         """Shows the Windows "Save as" dialog and writes the VMR text to the chosen file."""
         import webview
-        result = self.window.create_file_dialog(webview.FileDialog.SAVE, save_filename=file_name, file_types=("VMR files (*.vmr)", "All files (*.*)"))
+        result = self._window.create_file_dialog(webview.FileDialog.SAVE, save_filename=file_name, file_types=("VMR files (*.vmr)", "All files (*.*)"))
         if not result:
             return {"cancelled": True}
         path = result[0] if isinstance(result, (list, tuple)) else result
@@ -441,7 +444,7 @@ class JsApi:
     def open_file(self):
         """Shows the "Open" dialog and returns the text of the chosen VMR file."""
         import webview
-        result = self.window.create_file_dialog(webview.FileDialog.OPEN, file_types=("VMR files (*.vmr)", "All files (*.*)"))
+        result = self._window.create_file_dialog(webview.FileDialog.OPEN, file_types=("VMR files (*.vmr)", "All files (*.*)"))
         if not result:
             return {"cancelled": True}
         path = result[0] if isinstance(result, (list, tuple)) else result
@@ -461,16 +464,26 @@ def show_window(url, server):
     api = JsApi()
     print("  Opening the window (pywebview %s)." % getattr(webview, "__version__", "?"))
     window = webview.create_window("IVAO VMR generator", url, js_api=api, width=1500, height=950, min_size=(1000, 650))
-    api.window = window
-    window.events.loaded += lambda: print("  Page loaded in the window.")
-    # Used by the build workflow to check that the window really opens: close it again after a moment.
+    api._window = window
+    loaded = threading.Event()
+
+    def on_loaded():
+        print("  Page loaded in the window.")
+        loaded.set()
+    window.events.loaded += on_loaded
+    # Used by the build workflow to check that the window really opens: close it again once the page
+    # has loaded (closing a window whose page is still loading can hang WebView2).
     if SELF_TEST:
         def close_soon():
             import time
-            time.sleep(5)
+            if not loaded.wait(30):
+                print("  Self-test: the page did not load within 30 s.")
+            time.sleep(2)
             print("  Self-test: closing the window.")
             window.destroy()
         webview.start(close_soon)
+        if not loaded.is_set():
+            raise RuntimeError("Self-test: the page never loaded in the window.")
     else:
         webview.start()
     print("  Window closed.")
