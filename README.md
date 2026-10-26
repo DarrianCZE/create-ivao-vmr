@@ -64,12 +64,19 @@ Set the output directory for the VMR. The default location is the normal vPilot 
 `-v | -verbose`  
 More verbose logging of what's going on. Get a real sense of speed. Makes you feel like your computer is super duper fast.
 
+`-n | --no-pause`  
+By default the script waits for you to press Enter before it closes, so the output can be read when the script is started by double-clicking it. Use this option to skip the pause (for example when running the script from a batch file).
+
+## Log file
+Everything the script prints is also written to `create_vmr.log` in the folder the script is run from. If the script crashes, the full error is in that file. Please attach it when reporting a problem.
+
 
 ## I got an error when I ran the script!
 ### The error mentions an issue with "[VERSION]"
 This error occurs due to a bug with the IVAO MTL installation: some `aircraft.cfg` files contain a section header written as `VERSION]` instead of `[VERSION]`.  
 The `create_vmr.py` script now fixes this automatically. Before reading each `aircraft.cfg` it checks for a line that says `VERSION]` and adds the missing `[`. Nothing else in the file is changed. The script prints a list of the files it fixed at the end of the run.  
 If you still get the error (for example because the file is read-only), you can fix it by hand as described below.  
+Some of these files also contain a second `[VERSION]` section once the header is fixed. The script reads `aircraft.cfg` files in a tolerant mode, so a duplicated section or option no longer causes an error.  
 The error should look like this:  
 ![](https://i.imgur.com/PCx8Q4G.png)    
 In this case, navigate to the file listed in the error. Open the file and scroll all the way to the bottom. Near the bottom, we see this:   
