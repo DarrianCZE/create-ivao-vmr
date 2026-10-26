@@ -14,16 +14,16 @@ from collections import defaultdict
 
 verbose = False
 models_directory = "./SimObjects/Airplanes"
-output_directory = Path.home() / "Documents" / "vPilot Files"
+# All files are written to the folder the script is run from (the MTL folder), unless -p says otherwise.
+output_directory = Path(".")
 output_file = "ivaomtl.vmr"
 log_file = "create_vmr.log"
 lib = "ivao"
 pause_at_end = True
-# For the IVAO library the script writes three files:
-#   <output_file>            the complete VMR with every livery, in output_directory (vPilot Files)
-#   <stem>_standard.vmr      the VMR with the standard airline liveries only, in the folder the script is run from
-#   <stem>_liveries.csv      the list of all liveries with their names, in the folder the script is run from
-extra_directory = Path(".")
+# For the IVAO library the script writes three files next to each other in output_directory:
+#   <output_file>            the complete VMR with every livery
+#   <stem>_standard.vmr      the VMR with the standard airline liveries only
+#   <stem>_liveries.csv      the list of all liveries with their names
 # excluded_types = ["A4", "B1", "B2", "BE12", "BE35", "BE36", "BE40", "BE60", "C152", "C172", "C207"]
 
 errored_files = []
@@ -94,7 +94,7 @@ try:
         elif currentArgument in ("-n", "--no-pause"):
             pause_at_end = False
     
-    print("Output to: " + Path(output_directory / output_file).as_posix())
+    print("Output to: " + os.path.abspath(output_directory / output_file))
 except getopt.error as err:
     print(err)
 
@@ -362,21 +362,21 @@ def main():
         stem = Path(output_file).stem
         standard_file = stem + "_standard" + Path(output_file).suffix
         livery_list_file = stem + "_liveries.csv"
-        write_vmr(model_list, extra_directory / standard_file, True)
+        write_vmr(model_list, output_directory / standard_file, True)
     print("\n\nDone!")
     print("Processed: " + str(model_list_len) + " models.")
     print("Processed: " + str(texture_len) + " textures.")
     print("Processed: " + str(airlines_len) + " airlines.")
     print("Processed: " + str(rules_len) + " rules.")
-    print("VMR created: " + Path(output_directory / output_file).as_posix())
+    print("VMR created: " + os.path.abspath(output_directory / output_file))
     if lib == "ivao":
-        print("Standard liveries only VMR created: " + os.path.abspath(extra_directory / standard_file))
+        print("Standard liveries only VMR created: " + os.path.abspath(output_directory / standard_file))
         print("  Special liveries left out: " + str(special_skipped) + ".")
         if special_kept > 0:
             print("  Special liveries kept because the airline has no standard livery for that aircraft type: " + str(special_kept) + ".")
         try:
-            write_livery_list(extra_directory / livery_list_file)
-            print("Livery list created: " + os.path.abspath(extra_directory / livery_list_file))
+            write_livery_list(output_directory / livery_list_file)
+            print("Livery list created: " + os.path.abspath(output_directory / livery_list_file))
         except OSError as err:
             print("Could not write the livery list " + livery_list_file + ": " + str(err))
     if(len(fixed_files) != 0):
