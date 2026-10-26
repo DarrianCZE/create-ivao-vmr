@@ -67,7 +67,9 @@ More verbose logging of what's going on. Get a real sense of speed. Makes you fe
 
 ## I got an error when I ran the script!
 ### The error mentions an issue with "[VERSION]"
-This error occurs due to a bug with the IVAO MTL installation. The `create_vmr.py` script will let you know what files had the bug. The rest of the VMR will still be created, but that aircraft type will be excluded.  
+This error occurs due to a bug with the IVAO MTL installation: some `aircraft.cfg` files contain a section header written as `VERSION]` instead of `[VERSION]`.  
+The `create_vmr.py` script now fixes this automatically. Before reading each `aircraft.cfg` it checks for a line that says `VERSION]` and adds the missing `[`. Nothing else in the file is changed. The script prints a list of the files it fixed at the end of the run.  
+If you still get the error (for example because the file is read-only), you can fix it by hand as described below.  
 The error should look like this:  
 ![](https://i.imgur.com/PCx8Q4G.png)    
 In this case, navigate to the file listed in the error. Open the file and scroll all the way to the bottom. Near the bottom, we see this:   

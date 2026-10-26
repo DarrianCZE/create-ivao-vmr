@@ -6,6 +6,7 @@
 import configparser
 import getopt
 import os
+import re
 from pathlib import Path
 import sys
 from collections import defaultdict
@@ -18,6 +19,7 @@ lib = "ivao"
 # excluded_types = ["A4", "B1", "B2", "BE12", "BE35", "BE36", "BE40", "BE60", "C152", "C172", "C207"]
 
 errored_files = []
+fixed_files = []
 model_list_len = 0
 texture_len = 0
 airlines_len = 0
@@ -105,6 +107,38 @@ def determine_aircraft_type(config, section):
         return config[section]["ui_type"][1:5]
     
 
+# Some IVAO MTL aircraft.cfg files ship with a broken section header "VERSION]" (missing the opening "[").
+# configparser refuses to parse such a file, so the whole model would be left out of the VMR.
+# This function fixes only that one problem: lines that read "VERSION]" are rewritten as "[VERSION]".
+# The file is handled as raw bytes so the encoding, line endings and every other line stay exactly as they were.
+# Returns True if the file was changed.
+BROKEN_VERSION_LINE = re.compile(rb"^([ \t]*)VERSION\](?=[ \t]*(\r\n|\r|\n|$))")
+
+def fix_version_section(file_to_read):
+    try:
+        with open(file_to_read, "rb") as f:
+            lines = f.read().splitlines(keepends=True)
+    except OSError:
+        return False
+
+    changed = False
+    for i, line in enumerate(lines):
+        new_line, count = BROKEN_VERSION_LINE.subn(rb"\1[VERSION]", line, count=1)
+        if count:
+            lines[i] = new_line
+            changed = True
+            if verbose: print("  Fixed 'VERSION]' -> '[VERSION]' on line " + str(i + 1) + " of " + file_to_read)
+
+    if changed:
+        try:
+            with open(file_to_read, "wb") as f:
+                f.writelines(lines)
+            fixed_files.append(file_to_read)
+        except OSError as err:
+            print("Could not write fix to " + file_to_read + ": " + str(err))
+            return False
+    return changed
+
 # Reads all the aircraft.cfg files from the directory models_directory.
 # Assemble all the aircraft.cfg entries into a dictionary with format: model_list[CallsignPrefix][TypeCode][ModelName]
 def create_model_list():
@@ -117,6 +151,7 @@ def create_model_list():
         config = configparser.ConfigParser()
         try:
             if verbose: print("Reading " + file_to_read + "...")
+            fix_version_section(file_to_read)
             config.read(file_to_read)
         except configparser.ParsingError as err:
             print(err)
@@ -186,6 +221,10 @@ print("Processed: " + str(texture_len) + " textures.")
 print("Processed: " + str(airlines_len) + " airlines.")
 print("Processed: " + str(rules_len) + " rules.")
 print("VMR created: " + output_file)
+if(len(fixed_files) != 0):
+    print("\n\nSome aircraft.cfg files had a broken \"VERSION]\" section header. It was fixed to \"[VERSION]\" so the file could be read:")
+    for file in fixed_files:
+        print(file)
 if(len(errored_files) != 0):
     print("\n\nSome files had errors and were not included in the VMR:")
     for file in errored_files:
