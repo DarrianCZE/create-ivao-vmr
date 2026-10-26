@@ -225,8 +225,21 @@
     }
   }
 
-  function download() {
+  const inWindow = () => Boolean(window.pywebview && window.pywebview.api);
+
+  async function download() {
     const rules = combinedRules();
+    if (inWindow()) {
+      // Running in the application window: use the Windows "Save as" dialog instead of a browser download.
+      try {
+        const result = await window.pywebview.api.save_as($("fileName").value || "custom.vmr", buildVmr(rules));
+        if (result.error) $("saveResult").textContent = "Error: " + result.error;
+        else if (!result.cancelled) $("saveResult").textContent = "Saved: " + result.path + " – add this file in vPilot (Settings → Model Matching → Custom Rules) above the IVAO MTL VMR.";
+      } catch (err) {
+        $("saveResult").textContent = "Error: " + err;
+      }
+      return;
+    }
     const blob = new Blob([buildVmr(rules)], { type: "text/xml" });
     const link = el("a", { href: URL.createObjectURL(blob), download: $("fileName").value || "custom.vmr" });
     document.body.append(link);
@@ -270,20 +283,36 @@
   }
 
   // ---------------------------------------------------------------- import
+  async function importText(text, name) {
+    try {
+      const result = await api("/api/parse-vmr", { text: text });
+      state.rules.push(...result.rules.map(normaliseRule));
+      renderRules();
+      setStatus("Imported " + result.rules.length + " rules from " + name);
+    } catch (err) {
+      setStatus("Import failed: " + err.message, true);
+    }
+  }
+
   function importFile(file) {
     const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const result = await api("/api/parse-vmr", { text: reader.result });
-        state.rules.push(...result.rules.map(normaliseRule));
-        renderRules();
-        setStatus("Imported " + result.rules.length + " rules from " + file.name);
-      } catch (err) {
-        setStatus("Import failed: " + err.message, true);
-      }
-    };
+    reader.onload = () => importText(reader.result, file.name);
     reader.readAsText(file);
   }
+
+  async function importFromDialog() {
+    const result = await window.pywebview.api.open_file();
+    if (result.error) setStatus("Import failed: " + result.error, true);
+    else if (!result.cancelled) importText(result.text, result.name);
+  }
+
+  // In the application window the file input is replaced by a button that opens the Windows "Open" dialog.
+  window.addEventListener("pywebviewready", () => {
+    const input = $("importFile");
+    const button = el("button", { class: "secondary", onclick: importFromDialog }, "Open a VMR file…");
+    input.replaceWith(button);
+    $("download").textContent = "Save as…";
+  });
 
   // ---------------------------------------------------------------- init
   async function init() {

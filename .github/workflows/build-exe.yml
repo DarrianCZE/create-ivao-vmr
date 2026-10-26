@@ -27,8 +27,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install PyInstaller
-        run: pip install pyinstaller
+      - name: Install PyInstaller and pywebview
+        run: pip install pyinstaller pywebview
 
       - name: Work out the version
         id: version
@@ -46,10 +46,10 @@ jobs:
           APP_VERSION: ${{ steps.version.outputs.version }}
         run: pyinstaller build_exe.spec
 
-      - name: Smoke test the exe
+      - name: Smoke test the exe (server)
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath dist\IVAO_VMR_Generator.exe -ArgumentList "--no-browser","--port","8765" -PassThru -NoNewWindow
+          $p = Start-Process -FilePath dist\IVAO_VMR_Generator.exe -ArgumentList "--no-browser","--port","8765" -PassThru
           Start-Sleep -Seconds 8
           try {
             $state = Invoke-RestMethod http://127.0.0.1:8765/api/state
@@ -61,6 +61,20 @@ jobs:
           } finally {
             Stop-Process -Id $p.Id -Force
           }
+
+      # Opens the real application window (WebView2) and closes it again after a few seconds.
+      # Fails when pywebview or its WebView2 files did not make it into the exe.
+      - name: Smoke test the exe (window)
+        shell: pwsh
+        env:
+          IVAO_VMR_GUI_SELFTEST: "1"
+        run: |
+          $p = Start-Process -FilePath dist\IVAO_VMR_Generator.exe -ArgumentList "--port","8766" -PassThru
+          $p.WaitForExit(60000) | Out-Null
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; throw "the window did not close by itself" }
+          if (Test-Path dist\vmr_gui.log) { Get-Content dist\vmr_gui.log }
+          if ($p.ExitCode -ne 0) { throw "the window self-test failed with exit code $($p.ExitCode)" }
+          Write-Host "OK: the application window opened and closed"
 
       # The unsigned exe. SignPath reads this artifact (a zip with the exe inside), so the artifact
       # configuration in SignPath has to be <zip-file><pe-file path="IVAO_VMR_Generator.exe">...
