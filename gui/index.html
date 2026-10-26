@@ -8,9 +8,10 @@
 </head>
 <body>
 <header>
-  <h1>IVAO VMR generator</h1>
+  <h1>IVAO VMR generator <span id="version" class="version"></span></h1>
   <div id="status" class="status">Loading…</div>
 </header>
+<div id="notice" class="notice" role="alert" hidden></div>
 
 <main>
   <section class="column presets">
@@ -24,7 +25,6 @@
       <div class="indent">
         <label class="check"><input type="radio" name="mtlMode" id="mtlStandard" value="standard"> <span id="mtlStandardLabel">standard liveries only</span></label>
         <label class="check"><input type="radio" name="mtlMode" id="mtlAll" value="all"> <span id="mtlAllLabel">all liveries</span></label>
-        <label class="check"><input type="checkbox" id="mtlLiveryList"> <span>also write the livery list (<code>…_liveries.csv</code>)</span></label>
       </div>
     </div>
 
@@ -62,6 +62,7 @@
       <button id="save">Save to output folder</button>
       <button id="download" class="secondary">Download</button>
     </div>
+    <div id="outputFolder" class="hint"></div>
     <div id="saveResult" class="hint"></div>
     <details>
       <summary>Show VMR text</summary>
@@ -75,6 +76,7 @@
     <div class="row">
       <input type="search" id="search" placeholder="Search airline, type, id or name (e.g. TVS, B738, Smartwings)">
     </div>
+    <details id="errors" class="warning" hidden></details>
     <div id="libraryInfo" class="hint"></div>
     <div id="library" class="grid"></div>
   </section>

@@ -27,6 +27,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Standard library only: rule generation (script and GUI give the same VMR), VMR import/export, server checks.
+      - name: Run the tests
+        run: python -m unittest discover -s tests -v
+
       - name: Install PyInstaller and pywebview
         run: pip install pyinstaller pywebview
 
@@ -91,6 +95,20 @@ jobs:
           name: IVAO_VMR_Generator-unsigned
           path: dist/IVAO_VMR_Generator.exe
 
+      # The licenses of what the exe contains (Python, pywebview, WebView2, ...), read from the packages
+      # that were just bundled. Fails when a license text is missing. A separate artifact, so that the
+      # artifact SignPath signs keeps containing only the exe.
+      - name: Collect the licenses
+        run: |
+          python tools/collect_licenses.py licenses/THIRD-PARTY-LICENSES.txt
+          Copy-Item LICENSE, NOTICE licenses/
+
+      - name: Upload the licenses as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: licenses
+          path: licenses/
+
   # Code signing through SignPath Foundation (https://signpath.org), only for release tags.
   # Each signing request has to be approved by hand in SignPath by an approver of the project.
   # The job is skipped until the SignPath project exists and the repository variables
@@ -134,9 +152,21 @@ jobs:
           name: ${{ needs.sign.result == 'success' && 'IVAO_VMR_Generator' || 'IVAO_VMR_Generator-unsigned' }}
           path: release
 
-      - name: Attach exe to the release
+      # LICENSE, NOTICE and THIRD-PARTY-LICENSES.txt go with every copy of the exe (Apache 2.0 and the
+      # BSD/MIT licenses of the bundled software require it).
+      - name: Download the licenses
+        uses: actions/download-artifact@v4
+        with:
+          name: licenses
+          path: release
+
+      - name: Attach exe and licenses to the release
         uses: softprops/action-gh-release@v2
         with:
-          files: release/IVAO_VMR_Generator.exe
+          files: |
+            release/IVAO_VMR_Generator.exe
+            release/LICENSE
+            release/NOTICE
+            release/THIRD-PARTY-LICENSES.txt
           body: ${{ needs.sign.result == 'success' && 'IVAO_VMR_Generator.exe is signed by SignPath Foundation (free code signing provided by SignPath.io).' || 'IVAO_VMR_Generator.exe in this release is not code signed.' }}
           append_body: true

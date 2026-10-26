@@ -1,0 +1,19 @@
+create-ivao-vmr
+https://github.com/vojta48/create-ivao-vmr
+
+Copyright 2024 Andrew Ward (original create_vmr.py, https://github.com/andrewward2001/create-ivao-vmr)
+Copyright 2024-2026 create-ivao-vmr contributors
+
+Licensed under the Apache License, Version 2.0 (see the LICENSE file).
+This project is a modified version of the original create-ivao-vmr by Andrew Ward: create_vmr.py was
+changed and extended, and the GUI (vmr_gui.py, gui/), presets, tests and build files were added.
+
+The Windows executable (IVAO_VMR_Generator.exe) also contains third-party software under its own
+licenses: Python, pywebview, bottle, proxy_tools, typing_extensions, pythonnet, clr_loader, cffi,
+pycparser, the Microsoft WebView2 SDK and the PyInstaller bootloader. Their copyright notices and
+license texts are in THIRD-PARTY-LICENSES.txt, which is attached to every release.
+
+This project is not affiliated with or endorsed by IVAO, VATSIM, the author of vPilot or Microsoft.
+IVAO, VATSIM, vPilot and Microsoft Flight Simulator are names and trademarks of their respective owners.
+The livery pictures shown by the program are downloaded from the IVAO MTL catalog at run time and are
+not part of this project.

@@ -9,9 +9,14 @@
     selectedRule: -1,
     liveries: new Map(),  // mtl id -> livery
     mtlRules: { all: [], standard: [] },   // the rules create_vmr.py generates from the MTL
-    mtl: { enabled: false, mode: "standard", liveryList: false },
+    mtl: { enabled: false, mode: "standard" },
     catalogSearch: "https://mtl.ivao.aero/catalog?textureName={name}",
+    outputDir: "",
+    settingsLoaded: false,  // the settings of the last run are applied; only then are changes sent back
+    settingsSent: "",       // the settings last sent to the server, so that unchanged settings are not written again
   };
+  // Only my rules are kept in the browser. The other settings (VMR name, folder, presets, MTL choice) are kept
+  // by vmr_gui.py in vmr_gui_settings.json, because the application window does not keep browser storage.
   const DRAFT_KEY = "ivao-vmr-generator-draft";
 
   const $ = (id) => document.getElementById(id);
@@ -46,13 +51,9 @@
 
   function saveDraft() {
     try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({
-        rules: state.rules,
-        selectedPresets: [...state.selectedPresets],
-        mtl: state.mtl,
-        fileName: $("fileName").value,
-      }));
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ rules: state.rules }));
     } catch (e) { /* ignore */ }
+    saveSettings();
   }
 
   function loadDraft() {
@@ -60,18 +61,65 @@
       const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
       if (!draft) return;
       state.rules = (draft.rules || []).map(normaliseRule);
-      state.selectedPresets = new Set(draft.selectedPresets || []);
-      if (draft.mtl) state.mtl = { ...state.mtl, ...draft.mtl };
-      if (draft.fileName) $("fileName").value = draft.fileName;
     } catch (e) { /* ignore */ }
   }
 
+  // ---------------------------------------------------------------- settings of the last run
+  function currentSettings() {
+    return { fileName: $("fileName").value.trim(), selectedPresets: [...state.selectedPresets], mtlRules: { enabled: state.mtl.enabled, mode: state.mtl.mode } };
+  }
+
+  function applySettings(settings) {
+    if (settings.fileName) $("fileName").value = settings.fileName;
+    state.selectedPresets = new Set(settings.selectedPresets || []);
+    if (settings.mtlRules) state.mtl = { enabled: Boolean(settings.mtlRules.enabled), mode: settings.mtlRules.mode === "all" ? "all" : "standard" };
+    state.settingsSent = JSON.stringify(currentSettings());
+    state.settingsLoaded = true;
+  }
+
+  // Sends changed settings to the server, a moment after the last change (not on every key press).
+  let settingsTimer = null;
+  function saveSettings() {
+    if (!state.settingsLoaded) return;
+    clearTimeout(settingsTimer);
+    settingsTimer = setTimeout(() => {
+      const settings = currentSettings();
+      const text = JSON.stringify(settings);
+      if (text === state.settingsSent || !settings.fileName) return;
+      state.settingsSent = text;
+      api("/api/settings", { settings: settings }).catch(() => { state.settingsSent = ""; });
+    }, 400);
+  }
+
+  function showOutputFolder() {
+    $("outputFolder").textContent = state.outputDir ? "Output folder: " + state.outputDir : "";
+  }
+
+  function showNotice(text) {
+    $("notice").textContent = text || "";
+    $("notice").hidden = !text;
+  }
+
+  // exactCallsign (vPilot's Callsign) and flightNumbers (FlightNumberRange) only come from imported VMR files.
+  // They are kept as they are, so that a rule for one callsign does not turn into a rule for everybody.
   function normaliseRule(rule) {
-    return {
+    const out = {
       callsign: (rule.callsign || "").trim().toUpperCase(),
       type: (rule.type || "").trim().toUpperCase(),
       models: (rule.models || []).map((m) => m.trim()).filter(Boolean),
     };
+    if (rule.exactCallsign) out.exactCallsign = rule.exactCallsign.trim().toUpperCase();
+    if (rule.flightNumbers) out.flightNumbers = rule.flightNumbers.trim();
+    return out;
+  }
+
+  // vPilot uses the first rule that matches, so a later rule with the same conditions is never used.
+  function ruleKey(rule) {
+    return [rule.callsign, rule.exactCallsign || "", rule.flightNumbers || "", rule.type].join("|");
+  }
+
+  function ruleConditions(rule) {
+    return (rule.callsign || "*") + (rule.exactCallsign ? " =" + rule.exactCallsign : "") + (rule.flightNumbers ? " #" + rule.flightNumbers : "") + " " + rule.type;
   }
 
   function modelsFromText(text) {
@@ -122,7 +170,7 @@
       });
       const list = el("ul");
       for (const rule of preset.rules) {
-        const line = el("li", {}, (rule.callsign || "*") + " " + rule.type + " → ");
+        const line = el("li", {}, ruleConditions(rule) + " → ");
         rule.models.forEach((model, i) => {
           const known = state.liveries.size === 0 || state.liveries.has(model);
           line.append(el("span", { class: "model" + (known ? "" : " missing"), title: known ? "Show in the library" : "Not installed in your MTL", onclick: () => { $("search").value = model; renderLibrary(); } }, model));
@@ -143,6 +191,12 @@
   function renderRules() {
     const body = $("rulesBody");
     body.innerHTML = "";
+    // The rules that come before each of my rules in the file: the ticked presets, then my earlier rules.
+    const earlier = new Map();
+    for (const preset of state.presets) {
+      if (!state.selectedPresets.has(preset.id)) continue;
+      for (const rule of preset.rules) if (!earlier.has(ruleKey(rule))) earlier.set(ruleKey(rule), "preset " + preset.name);
+    }
     state.rules.forEach((rule, index) => {
       const row = el("tr", { class: index === state.selectedRule ? "selected" : "" });
       const select = () => { if (state.selectedRule !== index) { state.selectedRule = index; renderRules(); } };
@@ -153,6 +207,11 @@
       models.addEventListener("input", () => { rule.models = modelsFromText(models.value); updateOutput(); });
       const chips = el("div", { class: "chips" }, ...rule.models.map((m) => modelChip(m)));
       const warnings = [];
+      const key = ruleKey(normaliseRule(rule));
+      if (rule.type && rule.models.length) {
+        if (earlier.has(key)) warnings.push("Never used: " + earlier.get(key) + " already has a rule for " + ruleConditions(rule) + ", and vPilot takes the first one.");
+        else earlier.set(key, "your rule " + (index + 1));
+      }
       if (!rule.type) warnings.push("Type is required.");
       if (rule.models.length === 0) warnings.push("At least one model is required.");
       if (state.liveries.size > 0) {
@@ -160,7 +219,9 @@
         if (missing.length) warnings.push("Not installed: " + missing.join(", "));
       }
       row.append(
-        el("td", { class: "callsign" }, callsign),
+        el("td", { class: "callsign" }, callsign,
+          rule.exactCallsign ? el("div", { class: "muted", title: "Callsign: only this exact callsign (from the imported file)" }, "= " + rule.exactCallsign) : null,
+          rule.flightNumbers ? el("div", { class: "muted", title: "FlightNumberRange: only these flight numbers (from the imported file)" }, "# " + rule.flightNumbers) : null),
         el("td", { class: "type" }, type),
         el("td", { class: "models" }, models, chips, warnings.length ? el("div", { class: "warning" }, warnings.join(" ")) : null),
         el("td", {}, el("button", { class: "small danger", title: "Remove rule", onclick: () => { state.rules.splice(index, 1); if (state.selectedRule >= state.rules.length) state.selectedRule = state.rules.length - 1; renderRules(); } }, "✕"))
@@ -205,7 +266,6 @@
     $("mtlAll").checked = state.mtl.mode === "all";
     $("mtlStandardLabel").textContent = "standard liveries only (" + state.mtlRules.standard.length + " rules, like ivaomtl_standard.vmr)";
     $("mtlAllLabel").textContent = "all liveries (" + state.mtlRules.all.length + " rules, like ivaomtl.vmr)";
-    $("mtlLiveryList").checked = state.mtl.liveryList;
     for (const input of document.querySelectorAll("#mtl .indent input")) input.disabled = !(have && state.mtl.enabled);
   }
 
@@ -228,15 +288,20 @@
     return parts.join("; ");
   }
 
-  function buildVmr(rules) {
+  // The same as build_vmr in vmr_gui.py (used for "Save to output folder"); keep both alike.
+  function buildVmr(rules, comment) {
     const escape = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const lines = ['<?xml version="1.0" encoding="utf-8"?>', "<ModelMatchRuleSet>"];
     for (const rule of rules) {
+      if (!rule.type || !rule.models.length) continue;
       const attrs = (rule.callsign ? ' CallsignPrefix="' + escape(rule.callsign) + '"' : "") +
+        (rule.exactCallsign ? ' Callsign="' + escape(rule.exactCallsign) + '"' : "") +
+        (rule.flightNumbers ? ' FlightNumberRange="' + escape(rule.flightNumbers) + '"' : "") +
         ' TypeCode="' + escape(rule.type) + '" ModelName="' + escape(rule.models.join("//")) + '"';
       lines.push("<ModelMatchRule" + attrs + " />");
     }
     lines.push("</ModelMatchRuleSet>");
+    if (comment) lines.push("<!-- " + comment.replace(/--/g, "- -") + " -->");
     lines.push("<!-- VMR created by create-ivao-vmr GUI https://github.com/vojta48/create-ivao-vmr -->");
     return lines.join("\r\n") + "\r\n";
   }
@@ -244,7 +309,7 @@
   function updateOutput() {
     const rules = combinedRules();
     const own = rules.length - mtlRulesSelected().length;
-    $("vmrText").textContent = buildVmr(rules);
+    $("vmrText").textContent = buildVmr(rules, outputComment());
     $("save").textContent = "Save to output folder (" + rules.length + " rules)";
     $("outputSummary").textContent = state.mtl.enabled
       ? own + " rules from presets and my rules, then " + mtlRulesSelected().length + " rules generated from the MTL. In vPilot this file replaces the MTL VMR."
@@ -252,9 +317,9 @@
     saveDraft();
   }
 
-  function savedMessage(files) {
+  function savedMessage(path) {
     const where = state.mtl.enabled ? "use this file in vPilot (Settings → Model Matching → Custom Rules) instead of the IVAO MTL VMR." : "add this file in vPilot (Settings → Model Matching → Custom Rules) above the IVAO MTL VMR.";
-    return "Saved: " + files.join(", ") + " – " + where;
+    return "Saved: " + path + " – " + where;
   }
 
   async function save() {
@@ -262,11 +327,19 @@
     if (rules.length === 0) { $("saveResult").textContent = "Nothing to save: tick a preset or add a rule."; return; }
     $("saveResult").textContent = "Saving…";
     try {
-      const result = await api("/api/save", { fileName: $("fileName").value, rules: rules, comment: outputComment(), liveryList: state.mtl.enabled && state.mtl.liveryList });
-      $("saveResult").textContent = savedMessage(result.files || [result.path]);
+      const result = await api("/api/save", { fileName: $("fileName").value, rules: rules, comment: outputComment() });
+      $("saveResult").textContent = savedMessage(result.path);
+      savedTo(result);
     } catch (err) {
       $("saveResult").textContent = "Error: " + err.message;
     }
+  }
+
+  // After saving, the server remembers the folder and the name; the page shows them for the next save.
+  function savedTo(result) {
+    if (result.outputDir) { state.outputDir = result.outputDir; showOutputFolder(); }
+    const name = (result.path || "").split(/[\\/]/).pop();
+    if (name) { $("fileName").value = name; state.settingsSent = JSON.stringify(currentSettings()); }
   }
 
   const inWindow = () => Boolean(window.pywebview && window.pywebview.api);
@@ -276,15 +349,15 @@
     if (inWindow()) {
       // Running in the application window: use the Windows "Save as" dialog instead of a browser download.
       try {
-        const result = await window.pywebview.api.save_as($("fileName").value || "custom.vmr", buildVmr(rules));
+        const result = await window.pywebview.api.save_as($("fileName").value || "custom.vmr", buildVmr(rules, outputComment()));
         if (result.error) $("saveResult").textContent = "Error: " + result.error;
-        else if (!result.cancelled) $("saveResult").textContent = savedMessage([result.path]);
+        else if (!result.cancelled) { $("saveResult").textContent = savedMessage(result.path); savedTo(result); }
       } catch (err) {
         $("saveResult").textContent = "Error: " + err;
       }
       return;
     }
-    const blob = new Blob([buildVmr(rules)], { type: "text/xml" });
+    const blob = new Blob([buildVmr(rules, outputComment())], { type: "text/xml" });
     const link = el("a", { href: URL.createObjectURL(blob), download: $("fileName").value || "custom.vmr" });
     document.body.append(link);
     link.click();
@@ -312,7 +385,9 @@
         preview(livery, "picture", el("div", { class: "picture none" }, "no picture")),
         el("div", { class: "head" }, el("div", { class: "id" }, livery.id), link),
         el("div", { class: "name" + (livery.standard ? "" : " special") }, livery.name || livery.model),
-        el("div", { class: "meta" }, livery.type + " · " + (livery.airline || "any airline") + (livery.standard ? "" : " · special livery"))
+        el("div", { class: "meta" }, livery.type + " · " +
+          (!livery.inVmr ? "no airline code or invisible model, not in the MTL rules" : livery.airline || "any airline (type-only rule)") +
+          (livery.standard ? "" : " · special livery"))
       );
       grid.append(card);
     }
@@ -330,6 +405,17 @@
     make("airlines", airlines);
     make("types", types);
     make("models", [...state.liveries.keys()]);
+  }
+
+  // aircraft.cfg files that could not be read and liveries that were skipped (no type, no title, a title used
+  // twice): they are missing from the list and the MTL rules.
+  function renderErrors(errors) {
+    const box = $("errors");
+    box.innerHTML = "";
+    box.hidden = !errors.length;
+    if (!errors.length) return;
+    box.append(el("summary", {}, errors.length + " problem" + (errors.length > 1 ? "s" : "") + " in the aircraft.cfg files of your MTL: the liveries concerned are missing. Repair the MTL with the MTL Installer."),
+      el("ul", {}, ...errors.map((e) => el("li", {}, e))));
   }
 
   // ---------------------------------------------------------------- import
@@ -373,12 +459,17 @@
       state.catalogSearch = data.catalogSearch;
       state.liveries = new Map(data.liveries.map((l) => [l.id, l]));
       state.mtlRules = data.mtlRules;
+      state.outputDir = data.outputDir;
+      if (data.version) $("version").textContent = data.version;
+      if (data.settings) applySettings(data.settings);
+      showNotice(data.settingsNotice);
+      showOutputFolder();
       if (data.libraryFound) {
-        setStatus(data.liveries.length + " liveries found in " + data.airplanesFolder + " · output folder: " + data.outputDir);
+        setStatus(data.liveries.length + " liveries found in " + data.airplanesFolder);
       } else {
         setStatus("MTL not found in " + data.airplanesFolder + ". Run the script from the IVAO_MTL folder or pass -d. Presets and manual rules still work.", true);
       }
-      if (data.errors.length) console.warn("aircraft.cfg problems:", data.errors);
+      renderErrors(data.errors);
     } catch (err) {
       setStatus("Could not load data from the server: " + err.message, true);
     }
@@ -392,7 +483,6 @@
   $("mtlEnabled").addEventListener("change", () => { state.mtl.enabled = $("mtlEnabled").checked; renderMtl(); updateOutput(); });
   $("mtlStandard").addEventListener("change", () => { state.mtl.mode = "standard"; updateOutput(); });
   $("mtlAll").addEventListener("change", () => { state.mtl.mode = "all"; updateOutput(); });
-  $("mtlLiveryList").addEventListener("change", () => { state.mtl.liveryList = $("mtlLiveryList").checked; saveDraft(); });
 
   $("addRule").addEventListener("click", () => addRule());
   $("clearRules").addEventListener("click", () => { if (state.rules.length === 0 || confirm("Remove all your rules?")) { state.rules = []; state.selectedRule = -1; renderRules(); } });

@@ -3,3 +3,7 @@ __pycache__/
 build/
 dist/
 previews/
+/licenses/
+vmr_gui.log
+vmr_gui_settings.json
+vmr_gui_settings.json.part

@@ -1,101 +1,136 @@
-
-
 # create-ivao-vmr
-Create a vPilot VMR file from the IVAO MTL library.  
-**NEW**: This script now supports creating a VMR from the Alpha India Group (AIG) traffic library.
-The script writes its files to the folder you run it from. Use `-p` to export straight to your Documents/vPilot Files folder.
+Create vPilot model matching rules (a `.vmr` file) for the [IVAO MTL](https://mtl.ivao.aero/) in Microsoft Flight Simulator 2020 and 2024, so that other pilots on VATSIM show up in the right aircraft and the right airline livery.
 
-## Usage
-Requires [Python](https://www.python.org/).  
+There are two ways to use it:
 
-#### IVAO MTL:
-Make sure to [download](https://mtl.ivao.aero/installer), install, and index the IVAO MTL.  
-Drop the `create_vmr.py` file in your `Packages/Community/IVAO_MTL` folder.  
-Open a Windows Terminal and enter `python create_vmr.py`.  
-Wait for the script to finish. It should only take a few seconds (less than two for me).  
-The script creates three files in the folder you run it from (the `IVAO_MTL` folder):
+- **IVAO VMR Generator** (`IVAO_VMR_Generator.exe`, or `vmr_gui.py` from source): a window where you combine the rules generated from your MTL with ready-made presets and your own rules. You can see every livery with its picture, and you save one VMR for vPilot. Most users want this one.
+- **`create_vmr.py`**: a script that writes the VMRs generated from your MTL with one command, without any window.
 
-- `ivaomtl.vmr`: the complete VMR with every livery in the MTL.
-- `ivaomtl_standard.vmr`: the same rules, but with only the standard livery of each airline. The IVAO MTL contains many special, retro, alliance and event liveries next to the normal airline livery. vPilot picks one of the listed models at random, so an airline with one standard and three special liveries shows up in a special livery most of the time. In this VMR the special liveries are left out, so aircraft appear in the normal colours of their airline. Use either this file or `ivaomtl.vmr` in vPilot, not both.
-- `ivaomtl_liveries.csv`: one line per livery with the MTL ID, airline, aircraft type, texture, livery name and whether the standard-only VMR treats it as standard or special. Useful to check which liveries are left out.
+Both generate exactly the same rules from the MTL.
 
-The standard livery is recognised by its name from the [MTL catalog](https://mtl.ivao.aero/catalog), which the MTL stores in the `ui_variation` entry of each livery: `Air Canada (ACA)` is the standard livery, `Air Canada (old colors) (ACA)` or `Lufthansa (Star Alliance) (DLH)` are special ones. Descriptions that only name the engines or winglets of the model (`(CFM)`, `(IAE)`, `(WL)`) or say that it is the airline's new scheme (`(NC)`, `(New Colors)`) still count as standard. If a livery has no name, the texture name decides: `EWG` is standard, `EWG2` is special. If an airline only has special liveries for a given aircraft type, those are kept, because a special livery is still a better match than a generic aircraft. The script prints how many liveries were left out and how many were kept for this reason.  
+## Before you start
+1. Install the IVAO MTL with the [MTL Installer](https://mtl.ivao.aero/installer). It goes into the `Community` folder of your simulator, for example:
+   - MSFS 2024 (Steam): `...\steamapps\common\MSFS2024\Packages\Community\IVAO_MTL`
+   - MSFS 2020 (Steam): `...\steamapps\common\MicrosoftFlightSimulator\Packages\Community\IVAO_MTL`
+   - Microsoft Store versions: the `Community` folder inside the packages folder chosen when the sim was installed (`InstalledPackagesPath` in the sim's `UserCfg.opt`).
+2. Install [vPilot](https://vpilot.rosscarlson.dev/) and make sure it finds your simulator.
 
-#### AIG
-Make sure to [download](https://www.alpha-india.net/) and install the AIG library.  
-Drop the `create_vmr.py` file in your `Packages/Community/aig-aitraffic-oci-beta` folder.  
-Open a Windows Terminal and enter `python create_vmr.py -l aig`.  
-Wait for the script to finish. It should only take a few seconds (less than two for me).  
-The VMR file will be created as "aig.vmr" in the folder you run the script from.  
+## IVAO VMR Generator (GUI)
 
-#### Recommended VMR Order
-You can place your VMR files in any order you wish in vPilot.  
-I recommend the following order:
-```
-FSLTL
-AIG (this script's output)
-IVAO MTL (this script's output)
-British Avgeek's VMR
-```
-I recommend placing [British Avgeek's VMR (download)](https://flightsim.to/file/23365/full-vatsim-aig-beta-model-matching) at the end since it contains many substitutions, such as replacing the FedEx B722 with the B763 instead. This is very convenient and desirable as a fallback, but placing his VMR at the end of the list makes it more likely that we will see the correct models. In this example vPilot's model matching will be as follows:
-```
-FSLTL: no FDX B722 --skip--
-AIG: no FDX B722 --skip--
-IVAO MTL: FDX B722 found! (vPilot will use this)
-British Avgeek VMR: FDX B722 found! (shows as B763, skipped since IVAO is already being used.)
-```
+### Start it
+**Portable .exe (no Python, no installation):** download `IVAO_VMR_Generator.exe` from the [releases](https://github.com/vojta48/create-ivao-vmr/releases), put it into your `IVAO_MTL` folder and double-click it. The program opens in its own window, using the Microsoft Edge WebView2 runtime that is part of Windows 10 and 11. Release builds are code signed (see [Code signing policy](#code-signing-policy)). A build you take from a workflow run under *Actions* is not signed, so Windows SmartScreen may warn about an unknown publisher; use such a file only if you trust where it came from.
+
+**From source:** put `create_vmr.py`, `vmr_gui.py`, the `gui` folder and the `presets` folder into your `IVAO_MTL` folder and run `python vmr_gui.py` (requires [Python](https://www.python.org/) 3). With `pip install pywebview` it opens in its own window; without it, it opens in your browser at http://127.0.0.1:8765.
+
+### Build your VMR
+The VMR is put together from three parts, in this order. vPilot uses the first rule that fits, so the earlier parts win:
+
+1. **Presets**: ready-made rule sets for cases the MTL does not cover. Tick the ones you want. Two are included:
+   - `smartwings_group`: Smartwings, Smartwings Poland/Hungary/Slovakia and Czech Airlines, which fly each other's aircraft.
+   - `extra_rules`: liveries missing from the MTL, substituted with a similar one.
+
+   Every `.vmr` file in the `presets` folder is offered as a preset, and a `<!-- comment -->` in the file is shown as its description. With the .exe, create a `presets` folder next to it for your own files. A preset there replaces a built-in one with the same name.
+2. **My rules**: one line per rule.
+   - **Callsign**: the 3-letter airline code. Leave it empty for any callsign.
+   - **Type**: the ICAO aircraft type.
+   - **Models**: the MTL livery ids. Separate several ids with `//`; vPilot then picks one at random.
+
+   Click a livery in the right column to add it to the rule you are editing. You can also import the rules of an existing VMR file. Rules with vPilot's `Callsign` (one exact callsign) or `FlightNumberRange` attributes keep them. The GUI warns about liveries that are not installed, and about rules that vPilot would never use because a ticked preset or an earlier rule already has the same callsign and type.
+3. **The rules generated from your MTL**: tick *Add the rules generated from my MTL* and choose *standard liveries only* or *all liveries* (see [How the MTL rules are generated](#how-the-mtl-rules-are-generated)).
+
+The right column lists every livery installed in your MTL with its picture, catalog name, type and airline, and marks special liveries. Search by airline, type, id or name. The ↗ opens a livery in the [MTL catalog](https://mtl.ivao.aero/catalog). If some `aircraft.cfg` files of your MTL cannot be read, the GUI lists them above the liveries. Their liveries are missing until you repair the MTL with the MTL Installer.
+
+**Save** writes the file to the output folder, or anywhere through *Save as…*. The first time, the output folder is the folder of the program; after that it is the folder you saved to last, and *Save as…* opens there too.
+
+**Your settings are remembered.** The program keeps the name of the VMR, the folder you saved it to, the ticked presets and the MTL choice in `vmr_gui_settings.json` next to it, and starts with them the next time. A new version of the program keeps using that file. The file records which version created it. Only when a version changes the file in a way the old file cannot follow is the old file deleted: the program then shows a message that the settings were from a version that is no longer supported and were reset to the defaults. A damaged settings file is handled the same way. You can delete the file at any time to start from the defaults. Your own rules are kept by the page itself.
+
+**Where the pictures come from.** The thumbnails inside the MTL packages are the same generic picture for every livery, so the GUI shows the pictures from the MTL catalog instead. It finds the catalog number of each livery in the `ivao.ini` that the MTL Installer writes into every texture folder, or in the installer's `mtl.dat`. That number is all the download needs: no IVAO account, no API key. Each picture is downloaded the first time it is shown and kept in the `previews` folder next to the program, so it works offline afterwards. You can delete that folder at any time.
 
 ### Options
-`-d | --directory [path]` default: "./SimObjects/Airplanes"  
-Specify a path where the script will look for the model files. The path specified should contain the `SimObjects/Airplanes` folder. Make sure to put the path in quotation marks.  
+`-d` the folder that contains `SimObjects` (default: the current folder, or for the .exe the folder it is in) · `-p` the output folder (default: the folder you saved to last; `-p` overrides it for that run) · `--port` the port of the local server (a free one is used if it is taken) · `--browser` use the web browser instead of the window · `--no-browser` only run the server.
 
+If the .exe runs into a problem, it shows a message and writes the details to `vmr_gui.log` next to the .exe.
 
-`-l (lower-case L) | -library ["ivao" || "aig"]` default: ivao  
-Set which model-matching library you're using. Default is IVAO MTL. Use "aig" for the AIG library.
-
-
-```bash
--o | --output [file]
-# default: ivaomtl.vmr
-# python create_vmr.py -o "C:\Users\mydir\Documents\vPilot Files/out.vmr"
-# python create_vmr.py -o ivaomtl.vmr
+## create_vmr.py (command line)
+Put `create_vmr.py` into your `IVAO_MTL` folder, open a terminal there and run:
 ```
-Specify the output of the script. If you specify a directory, make sure to wrap it in quotation marks.  
-For the IVAO library the standard-only VMR and the livery list take their names from this file: `-o my.vmr` creates `my.vmr`, `my_standard.vmr` and `my_liveries.csv`.  
-
-
-`-p | --output-directory` default: the folder you run the script from  
-Set the output directory for all files, for example `-p "C:\Users\mydir\Documents\vPilot Files"` to export straight to vPilot. Ensure you wrap the entire path in "quotation marks".
- 
-
-`-v | -verbose`  
-More verbose logging of what's going on. Get a real sense of speed. Makes you feel like your computer is super duper fast.
-
-`-n | --no-pause`  
-By default the script waits for you to press Enter before it closes, so the output can be read when the script is started by double-clicking it. Use this option to skip the pause (for example when running the script from a batch file).
-
-## GUI: build your own VMR with presets and the MTL rules
-`vmr_gui.py` is a small graphical front end for building a VMR out of three parts: ready-made presets, your own rules, and the rules generated from your MTL (the same ones `create_vmr.py` makes). The presets and your rules are meant for what the MTL-generated file does not contain: airline groups that share liveries (for example the Smartwings group flying Czech Airlines colours), wet-lease operators, or liveries you want to see instead of the default one. They come first in the file, so they win in vPilot.
-
-**Portable .exe (no Python, no installation):** download `IVAO_VMR_Generator.exe` from the [releases](https://github.com/vojta48/create-ivao-vmr/releases) (or from the *Build portable exe* run under *Actions*), put it into your `Packages/Community/IVAO_MTL` folder and double-click it. The GUI opens in its own window (it uses the Microsoft Edge WebView2 runtime that is part of Windows 10 and 11). If something goes wrong, the program shows a message and writes the details to `vmr_gui.log` next to the .exe. The `gui` and `presets` folders are packed inside the .exe. To add your own presets, create a `presets` folder next to the .exe and put your `.vmr` files there. Windows SmartScreen may warn about an unknown publisher because the file is not signed; choose *More info → Run anyway*.
-
-**From source:** drop `vmr_gui.py`, the `gui` folder and the `presets` folder into your `Packages/Community/IVAO_MTL` folder (next to `create_vmr.py`) and run:
+python create_vmr.py
 ```
-python vmr_gui.py
+It takes a few seconds and writes two files into the folder you run it from:
+
+- `ivaomtl.vmr`: rules with every livery in the MTL.
+- `ivaomtl_standard.vmr`: the same rules with only the standard livery of each airline (see below). Use **either** this file **or** `ivaomtl.vmr` in vPilot, not both.
+
+At the end the script prints how many liveries it read, how many special liveries the standard VMR leaves out, and any `aircraft.cfg` files it had to repair or could not read. Everything it prints is also written to `create_vmr.log` in the same folder. Please attach that file when you report a problem.
+
+### Options
+| Option | Meaning |
+| --- | --- |
+| `-d`, `--directory <path>` | The `SimObjects/Airplanes` folder of the MTL (default: `./SimObjects/Airplanes`). Put the path in quotation marks. |
+| `-p`, `--output-directory <path>` | Folder for all output files (default: the current folder), e.g. `-p "C:\Users\me\Documents\vPilot Files"`. |
+| `-o`, `--output <file>` | Name of the VMR (default: `ivaomtl.vmr`). The standard-only VMR takes its name from it: `-o my.vmr` writes `my.vmr` and `my_standard.vmr`. |
+| `-l`, `--library <ivao\|aig>` | `aig` builds `aig.vmr` from the [Alpha India Group](https://www.alpha-india.net/) AI traffic library instead (run it from the `aig-aitraffic-oci-beta` folder). The standard-only VMR exists for the IVAO MTL only. |
+| `-v`, `--verbose` | Print every file, rule and special livery. |
+| `-n`, `--no-pause` | Don't wait for Enter at the end (the pause keeps the window open when the script is double-clicked). |
+
+## How the MTL rules are generated
+The GUI and the script use the same rules:
+
+- **One rule per airline and aircraft type**, with all its liveries as alternatives: `<ModelMatchRule CallsignPrefix="DLH" TypeCode="A320" ModelName="A320DLH//A320DLH2" />`.
+- **Airline code.** vPilot uses a rule when the pilot's callsign starts with its `CallsignPrefix`, so the prefix has to be the ICAO airline code. It is taken from the catalog name of the livery (`Air Dolomiti (DLA)` gives `DLA`), because some texture names in the MTL contain typos: `texture="DAL"` for Air Dolomiti would show Air Dolomiti for Delta flights. Liveries without a code in their name use the first three letters of their texture.
+- **The plain model of a type** gets a rule without a callsign, so that every aircraft of that type whose airline has no rule of its own still gets the right aircraft. These are the `default` livery, a livery without a texture, and a livery whose texture is the type itself (`HAR` for the AV-8 Harrier). The same goes for the type `ZZZZ` (blimp, balloon).
+- **Left out:** liveries without a usable airline code. These are `ZZZ` (no airline: a mix of private and government aircraft) and `@xx` (military and government). No callsign starts with these codes, so their rules would never be used. Military liveries whose name carries a real code, such as `United States Navy (USN)`, are kept with that code. The MTL's invisible model (`No Model (Invisible)`) is left out too, because otherwise vPilot would sometimes pick it for `ZZZZ` aircraft and show nothing. The GUI still lists left-out liveries (marked *not in the MTL rules*), and you can use them in your own rules. `create_vmr.py -v` prints each one.
+- **Standard liveries only.** The MTL has many special, retro, alliance and event liveries next to the normal one. vPilot picks one of the listed liveries at random, so an airline with one standard and three special liveries would mostly show up in a special one. The standard-only variant leaves the special liveries out.
+  - The standard livery is recognised by its catalog name. `Air Canada (ACA)` is standard, while `Air Canada (old colors) (ACA)` and `Lufthansa (Star Alliance) (DLH)` are special.
+  - Names that only mention engines, winglets or a new scheme (`(CFM)`, `(Sharklets)`, `(New Colors)`) still count as standard.
+  - Without a name, the texture decides: `EWG` is standard, `EWG2` is special.
+  - If an airline has only special liveries for a type, they are kept, because a special livery is still better than a generic aircraft.
+
+## Using the VMR in vPilot
+In vPilot open *Settings → Model Matching → Custom Rules* and add the file with *Add Custom Rule Set(s)*. After changing a file while vPilot is running, type `.reloadrules` in vPilot.
+
+- A VMR from the GUI **with** the MTL rules replaces `ivaomtl.vmr`. Don't add both.
+- A VMR from the GUI **without** the MTL rules goes **above** the MTL VMR, so that its rules win.
+
+**How vPilot chooses.** For each aircraft vPilot looks through all rule files in up to four passes. It stops at the first rule that fits:
+1. The airline and the exact type.
+2. The airline and a similar type (for example a B733 for a B734).
+3. A rule without an airline, with the exact type.
+4. A rule without an airline, with a similar type.
+
+Within a pass, files higher in the list win. If nothing fits, vPilot uses its own automatic matching or your default model.
+
+**Several libraries.** If you also use other model sets, a sensible order is the specific ones first and broad substitution sets last. For example:
 ```
-With `pip install pywebview` the GUI opens in its own window; without it, it opens in your browser (http://127.0.0.1:8765). `--browser` forces the browser. In the GUI you can:
+FSLTL
+AIG (create_vmr.py -l aig)
+IVAO MTL (this program)
+British Avgeek's VMR
+```
+[British Avgeek's VMR](https://flightsim.to/file/23365/full-vatsim-aig-beta-model-matching) contains many substitutions, such as a FedEx B763 for a FedEx B722. Placed last, it only fills the gaps: a FedEx B722 is found in the IVAO MTL first and shown as a B722.
 
-- **Tick presets**: every `.vmr` file in the `presets` folder is offered as a ready-made rule set. Two are included: `smartwings_group.vmr` (Smartwings, Smartwings Poland/Hungary/Slovakia and Czech Airlines sharing the Smartwings fleet) and `extra_rules.vmr` (liveries missing from the MTL, substituted with a similar one). Add your own `.vmr` files to the folder to offer them as presets; a `<!-- comment -->` in the file is shown as its description.
-- **Write your own rules**: one line per `ModelMatchRule` with the callsign prefix (3-letter airline code, empty for any callsign), the ICAO type and the MTL livery ids. Several liveries are separated with `//`, vPilot then picks one at random. Rules can also be imported from an existing VMR file.
-- **Add the MTL rules**: tick *Add the rules generated from my MTL* and choose *standard liveries only* (what `create_vmr.py` writes to `ivaomtl_standard.vmr`, see above) or *all liveries* (`ivaomtl.vmr`). They are appended after the presets and your rules, so one file is enough in vPilot. Optionally the livery list (`<name>_liveries.csv`) is written next to it.
-- **See the liveries**: the right column lists every livery installed in your MTL with its picture from the [MTL catalog](https://mtl.ivao.aero/catalog), its catalog name, type and airline, and marks the special liveries. Search by airline, type, id or name and click a livery to add it to the rule you are editing. The ↗ next to a livery opens it in the catalog. Each rule shows its liveries the same way and warns about ids that are not installed.
-- **Save**: the result is written to the folder you run the script from (or `-p`), or saved through a file dialog. Add the file in vPilot under *Settings → Model Matching → Custom Rules*: with the MTL rules included it replaces the IVAO MTL VMR, without them move it above the IVAO MTL VMR, so that its rules win.
+## Troubleshooting
+**"VERSION]" errors.** Some `aircraft.cfg` files in the MTL contain the section header `VERSION]` instead of `[VERSION]`.
+- `create_vmr.py` adds the missing `[` in the file and lists the files it fixed. Nothing else in the file is changed.
+- The GUI reads these files without changing them.
 
-**Where the pictures come from.** The thumbnails inside the MTL packages are one generic picture for every livery, so the GUI shows the pictures of the MTL catalog instead. The MTL Installer writes an `ivao.ini` into every texture folder it installs, and its `mtl_version` is the number of the livery in the catalog, which is all the picture download needs (no IVAO API key, no login). Each picture is downloaded the first time it is shown and kept in the `previews` folder next to the program, so the GUI works offline afterwards. You can delete that folder at any time. Liveries that did not come from the MTL Installer have no `ivao.ini` and show no picture.
+If the script cannot write the fix (for example because the file is read-only), open the file it names, find the line `VERSION]` near the end and change it to `[VERSION]`.
 
-Options: `-d` the folder that contains `SimObjects/Airplanes` (default: the current folder, for the .exe the folder it lies in), `-p` the output folder, `--port` the port of the local server, `--browser` to use the web browser instead of the window, `--no-browser` to only run the server.
+**Liveries or a whole aircraft are missing.** If an `aircraft.cfg` cannot be read at all, the script lists it under *Some files had errors*, and the GUI shows it above the liveries. This usually means the MTL installation is damaged; repair or update it with the MTL Installer and run again.
 
-Building the .exe yourself: `pip install pyinstaller pywebview` and `pyinstaller build_exe.spec` on Windows; the result is `dist/IVAO_VMR_Generator.exe`. The GitHub Actions workflow `build-exe.yml` does the same on every push and attaches the file to the release when a `v*` tag is pushed.
+**Anything else:** open an [issue](https://github.com/vojta48/create-ivao-vmr/issues) and attach `create_vmr.log` or `vmr_gui.log`.
+
+## Development
+- Tests: `python -m unittest discover -s tests` (standard library only, no MTL needed; the JavaScript tests also need Node.js). They cover the script, the GUI server and front end, and check that `create_vmr.py` and the GUI generate the same rules. The workflow runs them before every build. To also check against your installed MTL (read-only), set `IVAO_MTL_DIR` to its folder and run `python -m unittest discover -s tests -p test_real_mtl.py -v`. Every change has to come with matching tests; see [AGENTS.md](AGENTS.md#the-test-suite).
+- Build the .exe on Windows: `pip install pyinstaller pywebview`, then `pyinstaller build_exe.spec`. The result is `dist/IVAO_VMR_Generator.exe`. The GitHub Actions workflow `build-exe.yml` builds and smoke tests it on every push and pull request, and attaches it to the release when a `v*` tag is pushed.
+- Notes for contributors and AI coding agents are in [AGENTS.md](AGENTS.md).
+
+## License
+Licensed under the [Apache License 2.0](LICENSE). The original `create_vmr.py` was written by [Andrew Ward (andrewward2001)](https://github.com/andrewward2001/create-ivao-vmr). This project is a modified and extended version of it; see [NOTICE](NOTICE) for the copyright holders.
+
+The .exe also contains third-party software under its own licenses: Python, pywebview and its dependencies, the Microsoft WebView2 SDK and the PyInstaller bootloader, all under permissive licenses. Their copyright notices and license texts are in `THIRD-PARTY-LICENSES.txt`, which is attached to every release next to `LICENSE` and `NOTICE`. The build generates it from the bundled packages with `tools/collect_licenses.py`.
+
+This project is not affiliated with or endorsed by IVAO, VATSIM, the author of vPilot or Microsoft. The livery pictures come from the IVAO MTL catalog at run time and are not part of this project.
 
 ## Code signing policy
 Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
@@ -108,30 +143,9 @@ The Windows executable `IVAO_VMR_Generator.exe` attached to a [release](https://
 
 | Role | Members |
 | --- | --- |
-| Committers and reviewers | [vojta48](https://github.com/vojta48) |
+| Committers and reviewers | [vojta48](https://github.com/vojta48), [DarrianCZE](https://github.com/DarrianCZE) |
 | Approvers | [vojta48](https://github.com/vojta48) |
 
-**Privacy policy.** The program runs entirely on your computer. It does not collect, store or send any personal data, usage statistics or crash reports. It does not connect to the internet by itself; clicking a livery link opens `mtl.ivao.aero` in your browser, which is covered by [IVAO's privacy policy](https://ivao.aero/privacy).
+**Privacy policy.** The program runs entirely on your computer. It does not collect, store or send any personal data, usage statistics or crash reports. The only internet connection it makes is to download the pictures of the liveries it shows from the MTL catalog (`download.ivao.aero`); the request contains nothing but the catalog number of the livery. Each picture is downloaded once and kept in the `previews` folder next to the program. Your settings are kept in `vmr_gui_settings.json` next to the program and never leave your computer. Clicking a livery link opens `mtl.ivao.aero` in your browser. Both are covered by [IVAO's privacy policy](https://ivao.aero/privacy). `create_vmr.py` makes no internet connection at all. The local server of the GUI only accepts connections from your own computer.
 
 **Reporting a problem.** If you think a signed release contains something it should not, do not run it and open an [issue](https://github.com/vojta48/create-ivao-vmr/issues) with the file's SHA256 hash and where you downloaded it.
-
-## Log file
-Everything the script prints is also written to `create_vmr.log` in the folder the script is run from. If the script crashes, the full error is in that file. Please attach it when reporting a problem.
-
-
-## I got an error when I ran the script!
-### The error mentions an issue with "[VERSION]"
-This error occurs due to a bug with the IVAO MTL installation: some `aircraft.cfg` files contain a section header written as `VERSION]` instead of `[VERSION]`.  
-The `create_vmr.py` script now fixes this automatically. Before reading each `aircraft.cfg` it checks for a line that says `VERSION]` and adds the missing `[`. Nothing else in the file is changed. The script prints a list of the files it fixed at the end of the run.  
-If you still get the error (for example because the file is read-only), you can fix it by hand as described below.  
-Some of these files also contain a second `[VERSION]` section once the header is fixed. The script reads `aircraft.cfg` files in a tolerant mode, so a duplicated section or option no longer causes an error.  
-The error should look like this:  
-![](https://i.imgur.com/PCx8Q4G.png)    
-In this case, navigate to the file listed in the error. Open the file and scroll all the way to the bottom. Near the bottom, we see this:   
-![](https://i.imgur.com/0EVfEq5.png)  
-We can fix the problem by added the missing `[` to the beginning of where it says `VERSION]`. It should look like this:  
-![](https://i.imgur.com/PZIfCds.png)  
-Great! Now rerun the script with `python create_vmr.py`. This time there should be no errors.  
-
-### I got a different error!
-No problem! Head to the top of this page, click "Issues" and open a new issue.

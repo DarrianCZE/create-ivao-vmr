@@ -52,7 +52,7 @@ def write_version_file(path):
          StringStruct('FileDescription', 'IVAO VMR generator: build custom vPilot model matching rules for the IVAO MTL'),
          StringStruct('FileVersion', '%(version)s'),
          StringStruct('InternalName', '%(app)s'),
-         StringStruct('LegalCopyright', 'Apache License 2.0, https://github.com/vojta48/create-ivao-vmr'),
+         StringStruct('LegalCopyright', 'Copyright 2024-2026 Andrew Ward and create-ivao-vmr contributors. Apache License 2.0'),
          StringStruct('OriginalFilename', '%(app)s.exe'),
          StringStruct('ProductName', '%(product)s'),
          StringStruct('ProductVersion', '%(version)s')])
@@ -66,13 +66,20 @@ def write_version_file(path):
     return path
 
 
+def write_app_version(path):
+    """version.txt inside the exe: vmr_gui.py shows it and writes it into the settings file (createdBy, savedBy)."""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(APP_VERSION + "\n")
+    return path
+
+
 block_cipher = None
 
 a = Analysis(
     ["vmr_gui.py"],
     pathex=[],
     binaries=[],
-    datas=[("gui", "gui"), ("presets", "presets")],
+    datas=[("gui", "gui"), ("presets", "presets"), (write_app_version(os.path.join(workpath, "version.txt")), ".")],
     hiddenimports=[],
     hookspath=[],
     runtime_hooks=[],

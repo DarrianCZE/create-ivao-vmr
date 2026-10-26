@@ -1,0 +1,72 @@
+# Optional checks against a real IVAO MTL installation. Skipped unless IVAO_MTL_DIR points to one:
+#   set IVAO_MTL_DIR=D:\...\Packages\Community\IVAO_MTL      (PowerShell: $env:IVAO_MTL_DIR = "...")
+#   python -m unittest discover -s tests -p test_real_mtl.py -v
+# The installation is never changed: create_vmr.py runs on a copy of the aircraft.cfg files (it repairs
+# "VERSION]" in place), the GUI reads the original (it only reads).
+
+import os
+import re
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+
+from support import gui_rules, read_rules, run_script, vmr_gui
+
+MTL = os.environ.get("IVAO_MTL_DIR")
+
+
+@unittest.skipUnless(MTL and (Path(MTL) / "SimObjects" / "Airplanes").is_dir(), "IVAO_MTL_DIR not set")
+class RealMtlTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory()
+        copy = Path(cls._tmp.name) / "IVAO_MTL"
+        source = Path(MTL)
+        for cfg in (source / "SimObjects" / "Airplanes").glob("*/aircraft.cfg"):
+            target = copy / cfg.relative_to(source)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(cfg, target)
+        if (source / "mtl.dat").is_file():
+            shutil.copyfile(source / "mtl.dat", copy / "mtl.dat")
+        cls.out = Path(cls._tmp.name) / "out"
+        cls.script, cls.printed = run_script(copy / "SimObjects" / "Airplanes", cls.out)
+        cls.copy_library = vmr_gui.Library(copy).scan()
+        cls.library = vmr_gui.Library(source).scan()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def test_script_and_gui_agree(self):
+        self.assertEqual(read_rules(self.out / "ivaomtl.vmr"), gui_rules(self.copy_library, False))
+        self.assertEqual(read_rules(self.out / "ivaomtl_standard.vmr"), gui_rules(self.copy_library, True))
+
+    def test_gui_on_the_original_matches_the_copy(self):
+        self.assertEqual(gui_rules(self.library, False), gui_rules(self.copy_library, False))
+
+    def test_no_errors(self):
+        self.assertEqual(self.library.errors, [], "repair the MTL with the MTL Installer")
+
+    def test_rules_are_usable(self):
+        rules = gui_rules(self.library, False)
+        self.assertGreater(len(rules), 1000)
+        for prefix, type_code, models in rules:
+            self.assertRegex(prefix, r"^([A-Z]{3})?$")
+            self.assertTrue(type_code and models)
+        self.assertEqual(len({(p, t) for p, t, _ in rules}), len(rules))
+
+    def test_every_livery_has_a_catalog_number(self):
+        self.assertEqual([l["id"] for l in self.library.liveries.values() if not l["catalogId"]], [])
+
+    def test_mtl_dat_and_installed_liveries_match(self):
+        dat = Path(MTL) / "mtl.dat"
+        if not dat.is_file():
+            self.skipTest("no mtl.dat")
+        listed = {line.split(",", 1)[0] for line in dat.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()}
+        missing = sorted(listed - set(self.library.liveries))
+        self.assertEqual(missing, [], "liveries in mtl.dat that are not installed (damaged aircraft.cfg?)")
+
+
+if __name__ == "__main__":
+    unittest.main()
