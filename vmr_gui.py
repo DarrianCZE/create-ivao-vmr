@@ -57,8 +57,10 @@ LOG_FILE = APP_DIR / "vmr_gui.log"
 # The script works in the folder it is run from, like create_vmr.py. The .exe works in its own folder,
 # because Windows does not always start a double-clicked program in the folder it lies in.
 DEFAULT_DIR = str(APP_DIR) if FROZEN else "."
-# Set by the build workflow: open the window, close it again after a few seconds and exit.
+# Set by the build workflow: open the window, close it again after a few seconds and exit. With --no-browser
+# the server runs for SELF_TEST_SERVER_SECONDS and then stops by itself, so that the test never has to kill it.
 SELF_TEST = os.environ.get("IVAO_VMR_GUI_SELFTEST") == "1"
+SELF_TEST_SERVER_SECONDS = float(os.environ.get("IVAO_VMR_GUI_SELFTEST_SECONDS") or 30)
 
 # Page of a livery in the MTL catalog (https://mtl.ivao.aero/catalog).
 CATALOG_SEARCH = "https://mtl.ivao.aero/catalog?textureName={name}"
@@ -79,6 +81,8 @@ BROKEN_VERSION_LINE = re.compile(r"^([ \t]*)VERSION\](?=[ \t]*\r?$)", re.MULTILI
 # The settings of the last run (VMR name, folder of the last saved VMR, ticked presets and MTL choice).
 # See the "Settings" section below for how the file stays compatible between versions.
 SETTINGS_FILE = APP_DIR / "vmr_gui_settings.json"
+# The user's own rules ("My rules"), kept as a VMR file next to the program (see MyRules below).
+MY_RULES_FILE = APP_DIR / "vmr_gui_my_rules.vmr"
 
 
 def read_app_version():
@@ -536,15 +540,100 @@ class Settings:
 
 
 # --------------------------------------------------------------------------------------------------
+# My rules
+# --------------------------------------------------------------------------------------------------
+
+class MyRules:
+    """The user's own rules ("My rules" in the GUI), kept in vmr_gui_my_rules.vmr next to the program.
+
+    The file is an ordinary VMR, the format vPilot reads, so it does not change between versions of this
+    program and is never deleted with the settings; it can also be opened or imported anywhere. Only complete
+    rules (type and at least one livery) are in it, like in every VMR the GUI writes. path None keeps the
+    rules in memory only (used by the tests)."""
+
+    COMMENT = "My rules from the IVAO VMR generator. They are loaded again at the next start."
+
+    def __init__(self, path):
+        self.path = Path(path) if path else None
+        self.rules = None         # None: there is no file yet (the page may still have rules of an older version)
+        self.notice = None        # the message for the GUI when rules had to be changed
+        self.checked = False      # the rules were compared with the installed liveries in this run
+        self.lock = threading.Lock()
+
+    def load(self):
+        if self.path is not None and self.path.is_file():
+            try:
+                self.rules = parse_vmr(_read_text(self.path))
+            except OSError as err:
+                print("  My rules could not be read from %s: %s" % (self.path, err))
+        return self
+
+    def save(self, rules):
+        """Writes the rules (the format of parse_vmr) and returns them as they are now stored."""
+        with self.lock:
+            text = build_vmr(rules, self.COMMENT)
+            self.rules = parse_vmr(text)
+            if self.path is not None:
+                try:
+                    temp = self.path.with_name(self.path.name + ".part")
+                    temp.write_text(text, encoding="utf-8", newline="")
+                    temp.replace(self.path)
+                except OSError as err:
+                    print("  My rules could not be saved to %s: %s" % (self.path, err))
+            return self.rules
+
+    def remove_missing(self, library):
+        """The IVAO MTL changes: liveries are removed or renamed. A rule loses the liveries that are no longer
+        installed, and a rule left without any livery is removed. This is done once per run, and only when the
+        MTL was found and read without problems: with a wrong models folder or a damaged aircraft.cfg the
+        liveries are only missing for now, and removing rules then would throw away the user's work."""
+        if self.checked or not self.rules:
+            return
+        self.checked = True
+        if not library.airplanes.is_dir() or not library.liveries or library.errors:
+            return
+        kept, removed, shortened = [], [], []
+        for rule in self.rules:
+            installed = [m for m in rule["models"] if m in library.liveries]
+            missing = [m for m in rule["models"] if m not in library.liveries]
+            name = "%s %s" % (rule["callsign"] or rule.get("exactCallsign") or "*", rule["type"])
+            if not installed:
+                removed.append("%s (%s)" % (name, ", ".join(missing)))
+            elif missing:
+                shortened.append("%s (%s)" % (name, ", ".join(missing)))
+                kept.append(dict(rule, models=installed))
+            else:
+                kept.append(rule)
+        if not removed and not shortened:
+            return
+        self.save(kept)
+        parts = []
+        if removed:
+            parts.append("%d of your rules %s removed, because none of %s liveries %s installed any more: %s."
+                         % (len(removed), "was" if len(removed) == 1 else "were", "its" if len(removed) == 1 else "their",
+                            "is" if len(removed) == 1 else "are", "; ".join(removed)))
+        if shortened:
+            parts.append("Liveries that are no longer installed were removed from %d of your rules: %s."
+                         % (len(shortened), "; ".join(shortened)))
+        self.notice = "Your IVAO MTL has changed. " + " ".join(parts)
+        print("  " + self.notice)
+
+    def take_notice(self):
+        notice, self.notice = self.notice, None
+        return notice
+
+
+# --------------------------------------------------------------------------------------------------
 # HTTP server
 # --------------------------------------------------------------------------------------------------
 
 class App:
-    def __init__(self, models_root, output_dir=None, settings=None):
+    def __init__(self, models_root, output_dir=None, settings=None, my_rules=None):
         """output_dir None: the folder of the last saved VMR (from the settings), or DEFAULT_DIR. A folder given
         on the command line (-p) always wins and is kept for the whole run."""
         self.library = Library(models_root)
         self.settings = settings or Settings(None)
+        self.my_rules = my_rules or MyRules(None)
         self.fixed_output_dir = output_dir is not None
         last = self.settings.values["lastFolder"]
         if output_dir is None:
@@ -567,6 +656,12 @@ class App:
             if not self.library.scanned:
                 self.library.scan()
         return self.library
+
+    def checked_my_rules(self):
+        """My rules without the liveries that are no longer installed (see MyRules.remove_missing).
+        None when there is no rules file yet."""
+        self.my_rules.remove_missing(self.scanned_library())
+        return self.my_rules.rules
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -641,6 +736,8 @@ class Handler(BaseHTTPRequestHandler):
                 "version": APP_VERSION,
                 "settings": app.settings.values,
                 "settingsNotice": app.settings.take_notice(),
+                "myRules": app.checked_my_rules(),
+                "myRulesNotice": app.my_rules.take_notice(),
             })
         elif path == "/api/rescan":
             app.library.scan()
@@ -692,6 +789,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             app.saved(target)
             self.send_json({"path": str(target.resolve()), "outputDir": str(app.output_dir)})
+        elif path == "/api/my-rules":
+            # the page sends all its own rules after every change; incomplete ones are not stored
+            rules = data.get("rules")
+            if not isinstance(rules, list) or not all(isinstance(r, dict) for r in rules):
+                self.send_json({"error": "Expected a list of rules"}, 400)
+                return
+            self.send_json({"rules": app.my_rules.save(rules)})
         elif path == "/api/settings":
             # the page sends the settings it changed (file name, ticked presets, MTL choice)
             self.send_json({"settings": app.settings.update(data.get("settings") or {})})
@@ -788,7 +892,7 @@ def main():
 
     print("IVAO VMR generator GUI " + APP_VERSION)
     settings = Settings(SETTINGS_FILE).load()
-    app = Handler.app = App(args.directory, args.output_directory, settings)
+    app = Handler.app = App(args.directory, args.output_directory, settings, MyRules(MY_RULES_FILE).load())
     try:
         server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     except OSError:
@@ -796,6 +900,7 @@ def main():
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     url = "http://127.0.0.1:%d/" % server.server_address[1]
     print("  Settings: " + str(SETTINGS_FILE))
+    print("  My rules: " + str(MY_RULES_FILE))
     print("  Models folder: " + os.path.abspath(args.directory))
     print("  Output folder: " + os.path.abspath(app.output_dir))
     print("  GUI address: " + url)
@@ -803,7 +908,12 @@ def main():
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     try:
-        if args.no_browser:
+        if args.no_browser and SELF_TEST:
+            # the server smoke test of the build workflow: answer requests for a while, then stop cleanly
+            print("  Self-test: server only, stopping after %g s." % SELF_TEST_SERVER_SECONDS)
+            server_thread.join(SELF_TEST_SERVER_SECONDS)
+            print("  Self-test: stopping the server.")
+        elif args.no_browser:
             print("  Server only (--no-browser). Press Ctrl+C to stop.")
             server_thread.join()
         elif not args.browser and show_window(url, server, app):
@@ -842,7 +952,7 @@ if __name__ == "__main__":
         # Backstop for the build workflow: never hang around, whatever the window does.
         def watchdog():
             import time
-            time.sleep(40)
+            time.sleep(max(40, SELF_TEST_SERVER_SECONDS + 10))
             print("  Self-test: watchdog fired, the program did not finish in time.")
             sys.stdout.flush()
             os._exit(3)

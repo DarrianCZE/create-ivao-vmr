@@ -14,10 +14,13 @@
     outputDir: "",
     settingsLoaded: false,  // the settings of the last run are applied; only then are changes sent back
     settingsSent: "",       // the settings last sent to the server, so that unchanged settings are not written again
+    rulesLoaded: false,     // my rules came from the server; only then are changes sent back
+    rulesSent: "",          // my rules last sent to the server
   };
-  // Only my rules are kept in the browser. The other settings (VMR name, folder, presets, MTL choice) are kept
-  // by vmr_gui.py in vmr_gui_settings.json, because the application window does not keep browser storage.
-  const DRAFT_KEY = "ivao-vmr-generator-draft";
+  // vmr_gui.py keeps the settings in vmr_gui_settings.json and my rules in vmr_gui_my_rules.vmr, because the
+  // application window does not keep browser storage. Versions before 1.1.0 kept my rules in the browser under
+  // this key; they are moved to the file once.
+  const OLD_DRAFT_KEY = "ivao-vmr-generator-draft";
 
   const $ = (id) => document.getElementById(id);
 
@@ -49,19 +52,52 @@
     $("status").className = "status" + (isError ? " error" : "");
   }
 
+  // Called after every change: sends my rules and the settings to the server when they changed.
   function saveDraft() {
-    try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ rules: state.rules }));
-    } catch (e) { /* ignore */ }
+    saveMyRules();
     saveSettings();
   }
 
-  function loadDraft() {
+  // ---------------------------------------------------------------- my rules (vmr_gui_my_rules.vmr)
+  // Only complete rules are stored, like in every VMR (a rule still being typed is kept on the page).
+  function completeRules() {
+    return state.rules.map(normaliseRule).filter((r) => r.type && r.models.length);
+  }
+
+  function applyMyRules(rules) {
+    if (Array.isArray(rules)) {
+      state.rules = rules.map(normaliseRule);
+      state.rulesSent = JSON.stringify(completeRules());
+    } else {
+      // no rules file yet: take over the rules an older version kept in the browser (sent by the next saveDraft)
+      state.rules = oldDraftRules();
+      state.rulesSent = "";
+    }
+    state.rulesLoaded = true;
+  }
+
+  function oldDraftRules() {
     try {
-      const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
-      if (!draft) return;
-      state.rules = (draft.rules || []).map(normaliseRule);
-    } catch (e) { /* ignore */ }
+      const draft = JSON.parse(localStorage.getItem(OLD_DRAFT_KEY) || "null");
+      return draft && Array.isArray(draft.rules) ? draft.rules.map(normaliseRule) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  let rulesTimer = null;
+  function saveMyRules() {
+    if (!state.rulesLoaded) return;
+    clearTimeout(rulesTimer);
+    rulesTimer = setTimeout(() => {
+      const rules = completeRules();
+      const text = JSON.stringify(rules);
+      if (text === state.rulesSent) return;
+      state.rulesSent = text;
+      api("/api/my-rules", { rules: rules })
+        .then(() => { try { localStorage.removeItem(OLD_DRAFT_KEY); } catch (e) { /* ignore */ } })
+        .catch(() => { state.rulesSent = ""; });
+    }, 400);
   }
 
   // ---------------------------------------------------------------- settings of the last run
@@ -95,8 +131,10 @@
     $("outputFolder").textContent = state.outputDir ? "Output folder: " + state.outputDir : "";
   }
 
-  function showNotice(text) {
-    $("notice").textContent = text || "";
+  // Messages about the last run that the user should read once (settings reset, rules changed by the MTL).
+  function showNotice(...texts) {
+    const text = texts.filter(Boolean).join("\n\n");
+    $("notice").textContent = text;
     $("notice").hidden = !text;
   }
 
@@ -452,7 +490,6 @@
 
   // ---------------------------------------------------------------- init
   async function init() {
-    loadDraft();
     try {
       const data = await api("/api/state");
       state.presets = data.presets;
@@ -462,7 +499,8 @@
       state.outputDir = data.outputDir;
       if (data.version) $("version").textContent = data.version;
       if (data.settings) applySettings(data.settings);
-      showNotice(data.settingsNotice);
+      applyMyRules(data.myRules);
+      showNotice(data.settingsNotice, data.myRulesNotice);
       showOutputFolder();
       if (data.libraryFound) {
         setStatus(data.liveries.length + " liveries found in " + data.airplanesFolder);

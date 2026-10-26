@@ -102,9 +102,19 @@ class BuildFilesTest(unittest.TestCase):
         for name in ("LICENSE", "NOTICE", "THIRD-PARTY-LICENSES.txt"):
             self.assertRegex(workflow, r"release/%s\b" % re.escape(name))
 
+    def test_smoke_tests_never_kill_the_exe(self):
+        # a one-file exe is a launcher plus the real program: killing the launcher leaves the program running,
+        # so both smoke tests use the self-test mode, in which the program ends by itself
+        workflow = (ROOT / ".github" / "workflows" / "build-exe.yml").read_text(encoding="utf-8")
+        server = workflow[workflow.index("Smoke test the exe (server)"):workflow.index("Smoke test the exe (window)")]
+        self.assertIn('IVAO_VMR_GUI_SELFTEST: "1"', server)
+        self.assertIn("WaitForExit", server)
+        self.assertNotIn("Stop-Process", server)
+        self.assertIn("$state.version -ne $env:EXPECTED_VERSION", server)
+
     def test_gitignore(self):
         ignored = (ROOT / ".gitignore").read_text(encoding="utf-8").split()
-        for name in ("build/", "dist/", "previews/", "/licenses/", "__pycache__/", "create_vmr.log", "vmr_gui.log", "vmr_gui_settings.json"):
+        for name in ("build/", "dist/", "previews/", "/licenses/", "__pycache__/", "create_vmr.log", "vmr_gui.log", "vmr_gui_settings.json", "vmr_gui_my_rules.vmr"):
             self.assertIn(name, ignored)
         # only the folder CI generates at the top: tools/licenses/ holds license texts that must be committed
         self.assertNotIn("licenses/", ignored)

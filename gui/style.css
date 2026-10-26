@@ -28,7 +28,7 @@ header {
 }
 header h1 { font-size: 18px; margin: 0; }
 header .version { font-size: 12px; font-weight: normal; color: var(--muted); }
-.notice { margin: 12px 20px 0; padding: 8px 12px; border: 1px solid var(--warn); border-radius: 6px; background: var(--warn-soft); color: var(--warn); }
+.notice { white-space: pre-line; margin: 12px 20px 0; padding: 8px 12px; border: 1px solid var(--warn); border-radius: 6px; background: var(--warn-soft); color: var(--warn); }
 .status { color: var(--muted); }
 .status.error { color: var(--warn); }
 main {

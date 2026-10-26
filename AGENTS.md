@@ -36,8 +36,8 @@ the VMR tells it which MTL livery to load for a given callsign and aircraft type
 | `.github/workflows/build-exe.yml` | CI: tests, then exe build, server and window smoke tests, SignPath signing and release on `v*` tags. |
 
 Files the programs write at run time (all git-ignored, never commit them):
-- next to `vmr_gui.py` or the exe: `vmr_gui_settings.json` (settings, see invariant 10), `vmr_gui.log` (exe only),
-  `previews/` (catalog pictures);
+- next to `vmr_gui.py` or the exe: `vmr_gui_settings.json` (settings, see invariant 10), `vmr_gui_my_rules.vmr`
+  (the user's own rules, see invariant 11), `vmr_gui.log` (exe only), `previews/` (catalog pictures);
 - in the folder `create_vmr.py` is run from: `create_vmr.log`, plus the VMRs;
 - CI only: `/licenses/` (the generated license files; `tools/licenses/` is source and is committed).
 
@@ -95,7 +95,7 @@ Running the GUI from source in the repository folder therefore creates these fil
    uses the Python one, while the preview, "Save as" and the browser download use the JS one. Change both together.
 4. **Importing a VMR must not make a rule broader.** Keep `Callsign` and `FlightNumberRange`
    (as `exactCallsign` / `flightNumbers`) through parse → GUI → build.
-5. **The GUI never writes into the MTL.** It only writes VMR files to the output folder, previews to `previews/`, and `vmr_gui_settings.json` and `vmr_gui.log` next to the program.
+5. **The GUI never writes into the MTL.** It only writes VMR files to the output folder, previews to `previews/`, and `vmr_gui_settings.json`, `vmr_gui_my_rules.vmr` and `vmr_gui.log` next to the program.
 6. **The local server answers only this computer.** It checks the Host header, POSTs must be `application/json`,
    and there is no endpoint that reads arbitrary paths. Keep it that way when you add endpoints.
 7. **The README privacy policy must stay true.** It is part of the SignPath Foundation code-signing
@@ -121,6 +121,17 @@ Running the GUI from source in the repository folder therefore creates these fil
     - `createdBy` / `savedBy` are the app version from `version.txt` (written by `build_exe.spec`, `dev` from
       source). They are information only; compatibility is decided by `settingsVersion`.
     - Tests use `Settings(None)` (in memory) or a temp folder, never the real file next to the program.
+11. **The user's own rules are never lost by accident.** *My rules* live in `vmr_gui_my_rules.vmr` next to the
+    program (`MyRules` in `vmr_gui.py`):
+    - The file is a plain VMR (`build_vmr` / `parse_vmr`), never JSON. That format doesn't change, so the
+      file needs no version and is never deleted, not even when the settings are reset.
+    - The page sends all its rules after every change (`/api/my-rules`). Only complete rules are stored.
+    - At start (once per run), liveries that are no longer installed are removed from the rules, and rules
+      left without a livery are removed; the GUI shows what was removed. **Nothing is removed when the MTL
+      folder is missing, has no liveries, or the scan reported errors.** A wrong `-d` or a damaged
+      `aircraft.cfg` must never wipe the user's rules. Keep these guards.
+    - Rules from the old browser storage (key `ivao-vmr-generator-draft`) are moved to the file when there
+      is no file yet. Don't remove that migration while users of 1.0.x may still update.
 
 ## The test suite
 
@@ -159,9 +170,10 @@ Run it:
 | `test_previews.py` | Catalog pictures: download once, cache, failures remembered, parallel requests. The network is mocked; tests must never go online. |
 | `test_server.py` | Every HTTP endpoint, saving files, path traversal, and invariant 6 (Host check, JSON-only POST, no file-reading endpoint). |
 | `test_window.py` | The pywebview file dialogs (`JsApi`) and the fallback without pywebview, with a fake `webview` module. |
+| `test_my_rules.py` | Invariant 11: the own-rules file round trip, cleaning up after MTL changes (and the guards that prevent it), `/api/my-rules`, and the server self-test mode that stops by itself. |
 | `test_settings.py` | Invariant 10: the settings file round trip, files from older, newer, unsupported and broken versions, the notice, the output folder from the last save, `/api/settings`, the Save as dialog, the app version. |
 | `test_frontend.py` | `index.html` ↔ `app.js` ↔ server consistency, and the JS functions (`buildVmr` identical to `build_vmr`, invariant 3) run in Node.js. |
-| `test_project.py` | Presets are valid and have no shadowed rules, license files and headers, `collect_licenses.py`, build spec, workflow, `.gitignore`, `create_vmr.py` stays standard-library only. |
+| `test_project.py` | Presets are valid and have no shadowed rules, license files and headers, `collect_licenses.py`, build spec, workflow (including smoke tests that never kill the exe), `.gitignore`, `create_vmr.py` stays standard-library only. |
 | `test_real_mtl.py` | Optional checks against a real installation (`IVAO_MTL_DIR`). Skipped otherwise. |
 
 Writing tests: use `unittest` and the standard library only (no pytest, no new dependencies). Use temp folders
@@ -186,7 +198,8 @@ plain, explanatory comment style of the rest of the code.
   Instead, set `IVAO_VMR_GUI_SELFTEST=1`:
   - with `--no-browser`, the server runs and the program ends by itself after 40 seconds (a watchdog);
   - without it, the window opens, loads the page and closes (exit code 0 when it worked).
-  The server smoke test in the workflow still uses `Stop-Process`, which is harmless on a CI runner.
+  The workflow uses the same mode for both smoke tests (with `IVAO_VMR_GUI_SELFTEST_SECONDS` to shorten the
+  server run) and checks that the exe ended by itself with exit code 0. Never go back to `Stop-Process`.
 
 ## Style
 

@@ -50,21 +50,29 @@ jobs:
           APP_VERSION: ${{ steps.version.outputs.version }}
         run: pyinstaller build_exe.spec
 
+      # In self-test mode the server stops by itself after IVAO_VMR_GUI_SELFTEST_SECONDS. The exe is never
+      # killed: a one-file exe runs as a launcher plus the real program, and killing the launcher would leave
+      # the program running.
       - name: Smoke test the exe (server)
         shell: pwsh
+        env:
+          IVAO_VMR_GUI_SELFTEST: "1"
+          IVAO_VMR_GUI_SELFTEST_SECONDS: "20"
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
         run: |
           $p = Start-Process -FilePath dist\IVAO_VMR_Generator.exe -ArgumentList "--no-browser","--port","8765" -PassThru
           Start-Sleep -Seconds 8
-          try {
-            $state = Invoke-RestMethod http://127.0.0.1:8765/api/state
-            if ($state.presets.Count -lt 1) { throw "no presets bundled" }
-            $html = Invoke-WebRequest http://127.0.0.1:8765/ -UseBasicParsing
-            if ($html.StatusCode -ne 200) { throw "GUI page not served" }
-            $info = (Get-Item dist\IVAO_VMR_Generator.exe).VersionInfo
-            Write-Host "OK: $($state.presets.Count) presets, GUI served, product $($info.ProductName) $($info.ProductVersion)"
-          } finally {
-            Stop-Process -Id $p.Id -Force
-          }
+          $state = Invoke-RestMethod http://127.0.0.1:8765/api/state
+          if ($state.presets.Count -lt 1) { throw "no presets bundled" }
+          if ($state.version -ne $env:EXPECTED_VERSION) { throw "version $($state.version) instead of $env:EXPECTED_VERSION" }
+          $html = Invoke-WebRequest http://127.0.0.1:8765/ -UseBasicParsing
+          if ($html.StatusCode -ne 200) { throw "GUI page not served" }
+          $info = (Get-Item dist\IVAO_VMR_Generator.exe).VersionInfo
+          Write-Host "OK: $($state.presets.Count) presets, GUI served, version $($state.version), product $($info.ProductName) $($info.ProductVersion)"
+          $p.WaitForExit(60000) | Out-Null
+          if (-not $p.HasExited) { throw "the server did not stop by itself" }
+          if ($p.ExitCode -ne 0) { throw "the server self-test ended with exit code $($p.ExitCode)" }
+          Write-Host "OK: the server stopped by itself"
 
       # Opens the real application window (WebView2) and closes it again after a few seconds.
       # Fails when pywebview or its WebView2 files did not make it into the exe.
