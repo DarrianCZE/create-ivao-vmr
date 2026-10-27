@@ -2,6 +2,8 @@
 # Run this script from the root folder of the MTL library "Packages/Community/IVAO_MTL"
 # The output file is titled "ivaomtl.vmr" and is placed in this directory.
 # Script by github.com/andrewward2001
+# Changed and extended by the create-ivao-vmr contributors (https://github.com/vojta48/create-ivao-vmr).
+# Licensed under the Apache License, Version 2.0; see the LICENSE and NOTICE files.
 
 import configparser
 import getopt
@@ -20,23 +22,23 @@ output_file = "ivaomtl.vmr"
 log_file = "create_vmr.log"
 lib = "ivao"
 pause_at_end = True
-# For the IVAO library the script writes three files next to each other in output_directory:
+# For the IVAO library the script writes two files next to each other in output_directory:
 #   <output_file>            the complete VMR with every livery
 #   <stem>_standard.vmr      the VMR with the standard airline liveries only
-#   <stem>_liveries.csv      the list of all liveries with their names
 # excluded_types = ["A4", "B1", "B2", "BE12", "BE35", "BE36", "BE40", "BE60", "C152", "C172", "C207"]
 
 errored_files = []
 fixed_files = []
 special_titles = set()
+# Every livery read from the MTL: livery_info[title] = (airline code or None, type, texture, name, standard)
 livery_info = {}
 special_skipped = 0
 special_kept = 0
-kept_titles = set()
 model_list_len = 0
 texture_len = 0
 airlines_len = 0
 rules_len = 0
+no_code_len = 0
 
 # Everything printed to the console is also written to the log file, so the output can be read
 # even when the script is started by double-clicking it and the window closes right away.
@@ -116,24 +118,89 @@ def build_rule(callsign, type, modeltitle):
         # do nothing
         out = out + ""
     else:
-        out = out + " CallsignPrefix=\"" + callsign + "\""
-    out = out + " TypeCode=\"" + type + "\" ModelName=\"" + modeltitle + "\" /> \n"
+        out = out + " CallsignPrefix=\"" + xml_attr(callsign) + "\""
+    out = out + " TypeCode=\"" + xml_attr(type) + "\" ModelName=\"" + xml_attr(modeltitle) + "\" /> \n"
     return out
 
+# Escapes a value for an XML attribute, so that a title with "&" or a quote still gives a valid VMR.
+def xml_attr(value):
+    return value.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+
 # Ensures that callsign entries are 3-letter airline identifiers. Otherwise, leave this blank.
+# For the IVAO MTL it returns None when the livery has no airline code a callsign can start with (see mtl_airline_code).
 def determine_callsign_prefix(entry):
     global lib
     if lib == "aig":
         try:
-            return entry["icao_airline"]
+            return entry["icao_airline"].strip().strip("\"").strip()
         except:
             return ""
     if lib == "ivao":
-        if "\"" not in entry["texture"][1:4]:
-            return entry["texture"][1:4]
-        else:
+        return mtl_airline_code(entry.get("texture", ""), entry.get("ui_variation", ""), mtl_type_code(entry.get("ui_type", "")))
+
+# The CallsignPrefix of an IVAO MTL livery. vPilot uses a rule when the callsign starts with its CallsignPrefix.
+#   ""    no prefix: a type-only rule. Used for the plain model of a type (texture="default" or no texture),
+#         so that every aircraft of that type without an airline rule of its own gets it, and for the type ZZZZ
+#         (no type designator: the MTL has a blimp, a balloon and an invisible model for it).
+#   "ABC" the ICAO airline code. It is taken from the catalog name in ui_variation ("Air Dolomiti (DLA)"), because
+#         the texture names contain typos (texture="DAL" for Air Dolomiti, "EZE" for EasyJet). Liveries without a
+#         code in their name fall back to the first three letters of the texture.
+#   None  no usable code: ZZZ (no airline, a mix of private and government aircraft), "@xx" (military and
+#         government), numbers or a texture shorter than three letters. No callsign starts with these, so the
+#         rule would never match; the livery is left out of the VMR (-v prints each one).
+AIRLINE_CODE = re.compile(r"[A-Z]{3}")
+NO_AIRLINE = "ZZZ"
+
+#   A few names have the airline code in an earlier bracket and a livery tag last ("Emirates (UAE) (NBA)"): when
+#   the texture starts with one of the earlier codes, that one is the airline. Liveries named after the plain
+#   model with the type as texture (texture="HAR" for "AV-8 Harrier" of type HAR) get a type-only rule as well.
+#   The MTL also has an invisible model (texture="dummy", "No Model (Invisible)"). It is left out as well: in the
+#   type-only ZZZZ rule vPilot would pick it at random and show some aircraft as nothing at all.
+INVISIBLE_TEXTURE = "dummy"
+
+def mtl_airline_code(texture_name, ui_variation, type_code=""):
+    texture = texture_name.strip().strip("\"")
+    if texture.lower() == INVISIBLE_TEXTURE:
+        return None
+    if texture == "" or texture.lower() == "default" or type_code == "ZZZZ":
+        return ""
+    base, qualifiers, code = livery_name_parts(ui_variation)
+    prefix = texture[:3].upper()
+    if code != prefix and prefix in qualifiers and AIRLINE_CODE.fullmatch(prefix) and prefix != NO_AIRLINE:
+        code = prefix
+    if not AIRLINE_CODE.fullmatch(code) or code == NO_AIRLINE:
+        if type_code and texture.upper() == type_code:
             return ""
-        
+        code = prefix
+    if not AIRLINE_CODE.fullmatch(code) or code == NO_AIRLINE:
+        return None
+    return code
+
+# The aircraft type of an IVAO MTL livery: the first four characters of ui_type ("A320", "B38M", "F14").
+def mtl_type_code(ui_type):
+    return ui_type.strip().strip("\"")[:4].strip().upper()
+
+# Groups the liveries into rules: one rule per airline and aircraft type with all its liveries as alternatives.
+# model_list[airline][type] is the list of liveries (MTL ids) in the order they were found; special is the set of
+# special liveries (see is_standard_livery). With standard_only the special liveries are left out, unless an
+# airline has nothing but special liveries for a type: a special livery is still a better match than a generic one.
+# Returns a list of (airline, type, liveries, kept) where kept is True when special liveries were kept for that reason.
+# vmr_gui.py uses the same function, so the GUI and the script always generate the same rules.
+def group_rules(model_list, special, standard_only):
+    rules = []
+    for airline in model_list:
+        for type in model_list[airline]:
+            variants = model_list[airline][type]
+            kept = False
+            if standard_only:
+                standard_variants = [v for v in variants if v not in special]
+                if len(standard_variants) > 0:
+                    variants = standard_variants
+                else:
+                    kept = True
+            rules.append((airline, type, variants, kept))
+    return rules
+
 # Decides whether a livery is the standard airline livery or a special / alternative one.
 #
 # The IVAO MTL puts the livery name from the MTL catalog into ui_variation, in the form
@@ -185,7 +252,7 @@ def determine_aircraft_type(config, section):
                 return ""
         return ""
     else:
-        return config[section]["ui_type"][1:5]
+        return mtl_type_code(config[section]["ui_type"])
     
 
 # Some IVAO MTL aircraft.cfg files ship with a broken section header "VERSION]" (missing the opening "[").
@@ -224,8 +291,10 @@ def fix_version_section(file_to_read):
 # Assemble all the aircraft.cfg entries into a dictionary with format: model_list[CallsignPrefix][TypeCode][ModelName]
 def create_model_list():
     model_list = defaultdict(dict)
+    titles_seen = set()
 
-    for model in os.listdir(models_directory):
+    # sorted, so that the liveries of a rule are always in the same order (vmr_gui.py sorts the same way)
+    for model in sorted(os.listdir(models_directory)):
         global model_list_len
         model_list_len = model_list_len + 1
         file_to_read = models_directory + "/" + model + "/aircraft.cfg"
@@ -251,7 +320,8 @@ def create_model_list():
             errored_files.append(file_to_read)
             pass
         for section in config.sections():
-            if "fltsim" in section:
+            # [fltsim.0] in the MTL, [FLTSIM.0] in other libraries
+            if "fltsim" in section.lower():
                 global texture_len
                 texture_len = texture_len + 1
                 try:
@@ -268,10 +338,10 @@ def create_model_list():
                     continue
 
                 try:
-                    texture_title = config[section]["title"]
-                    if "\"" in texture_title: texture_title = texture_title[1:-1].encode('utf-8')
-                    global lib
-                    if lib == "ivao": texture_title = texture_title.decode('utf-8')
+                    # title="A320AAF" or title=A320AAF: the ModelName is the title without the quotes
+                    texture_title = config[section]["title"].strip().strip("\"").strip()
+                    if texture_title == "":
+                        raise ValueError("empty title")
                     callsign_prefix = determine_callsign_prefix(config[section])
                     texture_name = config[section].get("texture", "")
                     ui_variation = config[section].get("ui_variation", "")
@@ -279,12 +349,23 @@ def create_model_list():
                     print(file_to_read + " [" + section + "] could not be read (" + str(err) + "), skipping.")
                     errored_files.append(file_to_read)
                     continue
+                # Two liveries with the same title cannot be told apart by vPilot; the first one found is used.
+                if texture_title in titles_seen:
+                    print(file_to_read + " [" + section + "]: the title " + texture_title + " is already used by another livery, skipping.")
+                    errored_files.append(file_to_read)
+                    continue
+                titles_seen.add(texture_title)
                 if lib == "ivao":
                     standard = is_standard_livery(texture_name, ui_variation)
                     livery_info[texture_title] = (callsign_prefix, acf_type, texture_name.strip("\""), ui_variation.strip("\""), standard)
                     if not standard:
                         special_titles.add(texture_title)
                         if verbose: print("  Special livery: " + texture_title + " (" + ui_variation.strip("\"") + ")")
+                    if callsign_prefix is None:
+                        global no_code_len
+                        no_code_len = no_code_len + 1
+                        if verbose: print("  No airline code, left out: " + texture_title + " (" + ui_variation.strip("\"") + ")")
+                        continue
                 try:
                     model_list[callsign_prefix][acf_type].append(texture_title)
                 except:
@@ -296,58 +377,31 @@ def create_model_list():
 # Some airlines have multiple available textures for a single type. These are combined into one entry and the ModelNames are separated with "//"
 # With standard_only, the special liveries are left out (see is_standard_livery).
 def write_rules(model_list, output, standard_only):
-    for airline in model_list:
-        global airlines_len
-        if not standard_only: airlines_len = airlines_len + 1
+    global airlines_len, special_skipped, special_kept, rules_len
+    if not standard_only: airlines_len = airlines_len + len(model_list)
 
-        for type in model_list[airline]:
-            variants = model_list[airline][type]
-            if standard_only:
-                # Keep only the standard liveries. If an airline has nothing but special liveries for this type,
-                # keep them all: a special livery is still a better match than a generic aircraft.
-                standard_variants = [v for v in variants if v not in special_titles]
-                global special_skipped, special_kept
-                if len(standard_variants) > 0:
-                    special_skipped += len(variants) - len(standard_variants)
-                    variants = standard_variants
-                else:
-                    special_kept += len(variants)
-                    for v in variants: kept_titles.add(v)
-            variant_string = ""
-            for variant in variants:
-                if "&" in variant: continue
-                variant_string += variant
-                if variant != variants[-1]:
-                    variant_string += "//"
-            
-            if(type.endswith("\"")):
-                type = type[:-1]
-            output.write(build_rule(airline, type, variant_string))
-            if verbose and not standard_only: print("Created rule for airline " + airline + " type " + type)
-            global rules_len
-            if not standard_only: rules_len = rules_len + 1
+    for airline, type, variants, kept in group_rules(model_list, special_titles, standard_only):
+        if standard_only:
+            if kept:
+                special_kept += len(variants)
+            else:
+                special_skipped += len(model_list[airline][type]) - len(variants)
+
+        if(type.endswith("\"")):
+            type = type[:-1]
+        output.write(build_rule(airline, type, "//".join(variants)))
+        if verbose and not standard_only: print("Created rule for airline " + airline + " type " + type)
+        if not standard_only: rules_len = rules_len + 1
 
 # Writes one VMR file.
 def write_vmr(model_list, path, standard_only):
-    output = open(path, "w")
+    output = open(path, "w", encoding="utf-8")
     output.write("<?xml version=\"1.0\" encoding=\"utf-8\"?> \n")
     output.write("<ModelMatchRuleSet> \n")
     write_rules(model_list, output, standard_only)
     output.write("</ModelMatchRuleSet> \n")
     output.write("<!-- VMR created by create-ivao-vmr https://github.com/andrewward2001/create-ivao-vmr -->")
     output.close()
-
-# Writes a CSV with every livery, its name from the catalog and whether the standard-only VMR treats it as standard,
-# special, or special-but-kept (the airline has no standard livery for that type).
-def write_livery_list(path):
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.write("mtlid;airline;type;texture;name;livery\n")
-        for title in sorted(livery_info, key=lambda t: (livery_info[t][0], livery_info[t][1], t)):
-            airline, acf_type, texture, name, standard = livery_info[title]
-            if standard: kind = "standard"
-            elif title in kept_titles: kind = "special (kept, no standard livery)"
-            else: kind = "special"
-            f.write(";".join([title, airline, acf_type, texture, name.replace(";", ","), kind]) + "\n")
 
 def main():
     print("Building VMR for library: " + lib)
@@ -365,7 +419,6 @@ def main():
     if lib == "ivao":
         stem = Path(output_file).stem
         standard_file = stem + "_standard" + Path(output_file).suffix
-        livery_list_file = stem + "_liveries.csv"
         write_vmr(model_list, output_directory / standard_file, True)
     print("\n\nDone!")
     print("Processed: " + str(model_list_len) + " models.")
@@ -378,11 +431,8 @@ def main():
         print("  Special liveries left out: " + str(special_skipped) + ".")
         if special_kept > 0:
             print("  Special liveries kept because the airline has no standard livery for that aircraft type: " + str(special_kept) + ".")
-        try:
-            write_livery_list(output_directory / livery_list_file)
-            print("Livery list created: " + os.path.abspath(output_directory / livery_list_file))
-        except OSError as err:
-            print("Could not write the livery list " + livery_list_file + ": " + str(err))
+        if no_code_len > 0:
+            print("Liveries left out of both VMRs because they have no airline code a callsign can start with (ZZZ, military \"@\" codes) or because they are the invisible model: " + str(no_code_len) + ". Run the script with -v to see them.")
     if(len(fixed_files) != 0):
         print("\n\nSome aircraft.cfg files had a broken \"VERSION]\" section header. It was fixed to \"[VERSION]\" so the file could be read:")
         for file in fixed_files:

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # Simple GUI for building a custom vPilot VMR file on top of the IVAO MTL.
+# Copyright 2024-2026 create-ivao-vmr contributors. Licensed under the Apache License, Version 2.0; see LICENSE and NOTICE.
 #
 # Run it from the IVAO MTL folder (Packages/Community/IVAO_MTL), the same place as create_vmr.py:
 #   python vmr_gui.py
@@ -13,10 +14,13 @@
 #   - save the result as a VMR file.
 # Every livery shows its picture from the MTL catalog (https://mtl.ivao.aero/catalog) and links to its page
 # there. The pictures are downloaded once into the "previews" folder next to the program.
+# The settings of the last run (VMR name, its folder, ticked presets, MTL choice) are kept in
+# vmr_gui_settings.json next to the program.
 #
 # Options:
 #   -d | --directory [path]   folder that contains SimObjects/Airplanes (default: the current folder)
-#   -p | --output-directory   folder where generated VMR files are saved (default: the current folder)
+#   -p | --output-directory   folder where generated VMR files are saved (default: the folder of the last
+#                             saved VMR, the first time the current folder)
 #   --port [number]           port of the local server (default: 8765)
 #   --browser                 show the GUI in the web browser instead of its own window
 #   --no-browser              only run the server, do not open a window or a browser
@@ -37,9 +41,9 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-# The rule that decides whether a livery is the airline's standard livery or a special one is shared
-# with create_vmr.py, so the GUI and the script produce the same standard-only VMR.
-from create_vmr import is_standard_livery
+# The rules that turn the liveries into a VMR (airline code, aircraft type, standard or special livery,
+# grouping) are shared with create_vmr.py, so the GUI and the script produce the same VMRs.
+from create_vmr import group_rules, is_standard_livery, mtl_airline_code, mtl_type_code, xml_attr
 
 # When packed into an .exe with PyInstaller (see build_exe.spec), the gui and presets folders are bundled
 # inside the executable and unpacked to a temporary folder (sys._MEIPASS). Files the user edits or that
@@ -53,8 +57,10 @@ LOG_FILE = APP_DIR / "vmr_gui.log"
 # The script works in the folder it is run from, like create_vmr.py. The .exe works in its own folder,
 # because Windows does not always start a double-clicked program in the folder it lies in.
 DEFAULT_DIR = str(APP_DIR) if FROZEN else "."
-# Set by the build workflow: open the window, close it again after a few seconds and exit.
+# Set by the build workflow: open the window, close it again after a few seconds and exit. With --no-browser
+# the server runs for SELF_TEST_SERVER_SECONDS and then stops by itself, so that the test never has to kill it.
 SELF_TEST = os.environ.get("IVAO_VMR_GUI_SELFTEST") == "1"
+SELF_TEST_SERVER_SECONDS = float(os.environ.get("IVAO_VMR_GUI_SELFTEST_SECONDS") or 30)
 
 # Page of a livery in the MTL catalog (https://mtl.ivao.aero/catalog).
 CATALOG_SEARCH = "https://mtl.ivao.aero/catalog?textureName={name}"
@@ -66,6 +72,29 @@ CATALOG_SEARCH = "https://mtl.ivao.aero/catalog?textureName={name}"
 CATALOG_IMAGE = "https://download.ivao.aero/v2/aircraftsTextures/{id}/files/latest/image"
 PREVIEWS_DIR = APP_DIR / "previews"
 TEXTURE_INFO_FILE = "ivao.ini"
+# The MTL Installer also keeps a list of every livery in mtl.dat in the MTL folder, one line per livery:
+# "A320AAF,Aigle Azur (AAF),0.0,0.0,11636" (MTL id, catalog name, two numbers, catalog number). It is used
+# for the catalog number of liveries whose texture folder has no ivao.ini.
+MTL_DAT_FILE = "mtl.dat"
+BROKEN_VERSION_LINE = re.compile(r"^([ \t]*)VERSION\](?=[ \t]*\r?$)", re.MULTILINE)
+
+# The settings of the last run (VMR name, folder of the last saved VMR, ticked presets and MTL choice).
+# See the "Settings" section below for how the file stays compatible between versions.
+SETTINGS_FILE = APP_DIR / "vmr_gui_settings.json"
+# The user's own rules ("My rules"), kept as a VMR file next to the program (see MyRules below).
+MY_RULES_FILE = APP_DIR / "vmr_gui_my_rules.vmr"
+
+
+def read_app_version():
+    """The version of this program. The build writes it into version.txt inside the .exe (see build_exe.spec);
+    running from source it is "dev"."""
+    try:
+        return (BUNDLE_DIR / "version.txt").read_text(encoding="utf-8").strip() or "dev"
+    except OSError:
+        return "dev"
+
+
+APP_VERSION = read_app_version()
 
 
 # --------------------------------------------------------------------------------------------------
@@ -73,52 +102,65 @@ TEXTURE_INFO_FILE = "ivao.ini"
 # --------------------------------------------------------------------------------------------------
 
 def parse_vmr(text):
-    """Returns the ModelMatchRule entries of a VMR file as a list of dicts with
-    callsign, type and models (list of ModelName alternatives)."""
+    """Returns the ModelMatchRule entries of a VMR file as a list of dicts with callsign (CallsignPrefix),
+    type, models (list of ModelName alternatives) and, only when the rule has them, exactCallsign
+    (Callsign: the whole callsign must match) and flightNumbers (FlightNumberRange, e.g. "4439-4858")."""
     rules = []
     # Some hand-made VMR files are not well-formed XML (missing closing tag, comment after the root).
     # Try the XML parser first and fall back to a regular expression that only looks at the rules.
     try:
         root = ET.fromstring(text.strip())
         for rule in root.iter("ModelMatchRule"):
-            rules.append(_make_rule(rule.get("CallsignPrefix", ""), rule.get("TypeCode", ""), rule.get("ModelName", "")))
+            rules.append(_make_rule(rule.attrib))
         return rules
     except ET.ParseError:
         pass
     for match in re.finditer(r"<ModelMatchRule\b([^>]*)/?>", text):
         attrs = dict(re.findall(r'(\w+)\s*=\s*"([^"]*)"', match.group(1)))
-        rules.append(_make_rule(attrs.get("CallsignPrefix", ""), attrs.get("TypeCode", ""), attrs.get("ModelName", "")))
+        rules.append(_make_rule({k: _xml_unescape(v) for k, v in attrs.items()}))
     return rules
 
 
-def _make_rule(callsign, type_code, model_name):
-    return {
-        "callsign": callsign.strip().upper(),
-        "type": type_code.strip().upper(),
-        "models": [m.strip() for m in model_name.split("//") if m.strip()],
+def _make_rule(attrs):
+    rule = {
+        "callsign": attrs.get("CallsignPrefix", "").strip().upper(),
+        "type": attrs.get("TypeCode", "").strip().upper(),
+        "models": [m.strip() for m in attrs.get("ModelName", "").split("//") if m.strip()],
     }
+    # Without these the rule would be imported as a much broader one (a rule for one callsign would
+    # become a rule for every aircraft of that type).
+    if attrs.get("Callsign", "").strip():
+        rule["exactCallsign"] = attrs["Callsign"].strip().upper()
+    if attrs.get("FlightNumberRange", "").strip():
+        rule["flightNumbers"] = attrs["FlightNumberRange"].strip()
+    return rule
+
+
+def _xml_unescape(value):
+    return value.replace("&quot;", '"').replace("&lt;", "<").replace("&gt;", ">").replace("&apos;", "'").replace("&amp;", "&")
 
 
 def build_vmr(rules, comment=None):
-    """Builds the text of a VMR file from a list of rules (see parse_vmr for the format)."""
+    """Builds the text of a VMR file from a list of rules (see parse_vmr for the format).
+    gui/app.js has the same function (buildVmr) for the preview and the "Save as" file; keep both alike."""
     lines = ['<?xml version="1.0" encoding="utf-8"?>', "<ModelMatchRuleSet>"]
     for rule in rules:
         if not rule.get("type") or not rule.get("models"):
             continue
         attrs = ""
         if rule.get("callsign"):
-            attrs += ' CallsignPrefix="%s"' % _xml_attr(rule["callsign"])
-        attrs += ' TypeCode="%s" ModelName="%s"' % (_xml_attr(rule["type"]), _xml_attr("//".join(rule["models"])))
+            attrs += ' CallsignPrefix="%s"' % xml_attr(rule["callsign"])
+        if rule.get("exactCallsign"):
+            attrs += ' Callsign="%s"' % xml_attr(rule["exactCallsign"])
+        if rule.get("flightNumbers"):
+            attrs += ' FlightNumberRange="%s"' % xml_attr(rule["flightNumbers"])
+        attrs += ' TypeCode="%s" ModelName="%s"' % (xml_attr(rule["type"]), xml_attr("//".join(rule["models"])))
         lines.append("<ModelMatchRule%s />" % attrs)
     lines.append("</ModelMatchRuleSet>")
     if comment:
         lines.append("<!-- %s -->" % comment.replace("--", "- -"))
     lines.append("<!-- VMR created by create-ivao-vmr GUI https://github.com/vojta48/create-ivao-vmr -->")
     return "\r\n".join(lines) + "\r\n"
-
-
-def _xml_attr(value):
-    return value.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def list_presets():
@@ -171,8 +213,9 @@ class Library:
     def scan(self):
         self.liveries = {}
         self.errors = []
+        self.catalog_ids = read_mtl_dat(self.models_root / MTL_DAT_FILE)
         if self.airplanes.is_dir():
-            for model_dir in sorted(self.airplanes.iterdir()):
+            for model_dir in sorted(self.airplanes.iterdir(), key=lambda p: p.name):  # the order create_vmr.py uses
                 cfg = model_dir / "aircraft.cfg"
                 if cfg.is_file():
                     self._read_cfg(model_dir, cfg)
@@ -190,70 +233,65 @@ class Library:
             pass
         config = configparser.ConfigParser(strict=False, interpolation=None)
         try:
-            try:
-                config.read(cfg, encoding="utf-8-sig")
-            except UnicodeDecodeError:
-                config = configparser.ConfigParser(strict=False, interpolation=None)
-                config.read(cfg, encoding="cp1252")
-        except (configparser.Error, UnicodeDecodeError) as err:
+            # The broken "VERSION]" header that create_vmr.py repairs in the file (see fix_version_section
+            # there) is repaired here in memory only: the GUI does not change the MTL.
+            text = BROKEN_VERSION_LINE.sub(r"\1[VERSION]", _read_text(cfg))
+            config.read_string(text, source=str(cfg))
+        except (configparser.Error, OSError) as err:
             self.errors.append("%s: %s" % (cfg, err))
         for section in config.sections():
-            if not section.lower().startswith("fltsim"):
+            if "fltsim" not in section.lower():
                 continue
             entry = config[section]
             title = _unquote(entry.get("title", ""))
-            if not title:
+            type_code = mtl_type_code(entry.get("ui_type", ""))
+            # The same liveries create_vmr.py skips (see create_model_list there), with the same reasons.
+            problem = None
+            if not type_code:
+                problem = "has an empty aircraft type"
+            elif not title:
+                problem = "has no title"
+            elif title in self.liveries:
+                problem = "uses the title %s, which another livery already uses" % title
+            if problem:
+                self.errors.append("%s [%s] %s, skipped." % (cfg, section, problem))
                 continue
             texture = _unquote(entry.get("texture", ""))
-            ui_type = _unquote(entry.get("ui_type", ""))
             name = _unquote(entry.get("ui_variation", ""))
+            airline = mtl_airline_code(texture, name, type_code)
             self.liveries[title] = {
                 "id": title,
-                "airline": texture[:3].upper() if len(texture) >= 3 else "",
-                "type": ui_type[:4].upper(),
+                "airline": airline or "",
+                # False for liveries without an airline code a callsign can start with (ZZZ, "@xx"): the rules
+                # generated from the MTL leave them out (see mtl_airline_code in create_vmr.py).
+                "inVmr": airline is not None,
+                "type": type_code,
                 "texture": texture,
                 "name": name,
                 "model": model_dir.name,
                 "standard": is_standard_livery(texture, name),
-                "catalogId": read_catalog_id(folders.get(texture.lower())),
+                "catalogId": read_catalog_id(folders.get(texture.lower())) or self.catalog_ids.get(title),
             }
 
     def summary(self):
         return list(self.liveries.values())
 
-    def mtl_rules(self, standard_only):
-        """The rules create_vmr.py generates from the MTL: one rule per airline and aircraft type with all
-        its liveries as alternatives. With standard_only the special liveries are left out, unless the
-        airline has nothing but special liveries for that type (see create_vmr.py)."""
-        groups = {}
+    def _model_list(self):
+        """The liveries in the form create_vmr.py groups them: model_list[airline][type] = [MTL ids]."""
+        model_list = {}
         for livery in self.liveries.values():
-            if not livery["type"] or "&" in livery["id"]:
-                continue
-            groups.setdefault((livery["airline"], livery["type"]), []).append(livery)
-        rules = []
-        for (airline, type_code), liveries in groups.items():
-            if standard_only:
-                standard = [l for l in liveries if l["standard"]]
-                if standard:
-                    liveries = standard
-            rules.append({"callsign": airline, "type": type_code, "models": [l["id"] for l in liveries]})
-        return rules
+            if livery["type"] and livery["inVmr"]:
+                model_list.setdefault(livery["airline"], {}).setdefault(livery["type"], []).append(livery["id"])
+        return model_list
 
-    def livery_list_csv(self):
-        """The livery list create_vmr.py writes next to the VMR (<stem>_liveries.csv)."""
-        kept = set()
-        for rule in self.mtl_rules(True):
-            kept.update(rule["models"])
-        lines = ["mtlid;airline;type;texture;name;livery"]
-        for livery in sorted(self.liveries.values(), key=lambda l: (l["airline"], l["type"], l["id"])):
-            if livery["standard"]:
-                kind = "standard"
-            elif livery["id"] in kept:
-                kind = "special (kept, no standard livery)"
-            else:
-                kind = "special"
-            lines.append(";".join([livery["id"], livery["airline"], livery["type"], livery["texture"], livery["name"].replace(";", ","), kind]))
-        return "\n".join(lines) + "\n"
+    def _special(self):
+        return {l["id"] for l in self.liveries.values() if not l["standard"]}
+
+    def mtl_rules(self, standard_only):
+        """The rules create_vmr.py generates from the MTL (see group_rules there): one rule per airline and
+        aircraft type with all its liveries as alternatives, with standard_only the standard liveries only."""
+        return [{"callsign": airline, "type": type_code, "models": models}
+                for airline, type_code, models, kept in group_rules(self._model_list(), self._special(), standard_only)]
 
 
 def _unquote(value):
@@ -279,6 +317,22 @@ def read_catalog_id(texture_dir):
         return None
     match = re.search(r"^\s*mtl_version\s*=\s*(\d+)\s*$", text, re.MULTILINE | re.IGNORECASE)
     return int(match.group(1)) if match else None
+
+
+def read_mtl_dat(path):
+    """MTL id -> catalog number from the mtl.dat of the MTL Installer. Empty when there is no such file."""
+    ids = {}
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return ids
+    for line in text.splitlines():
+        # the catalog name can contain commas, the catalog number is always the last field
+        mtl_id, _, rest = line.partition(",")
+        number = rest.rpartition(",")[2].strip()
+        if mtl_id.strip() and number.isdigit():
+            ids[mtl_id.strip()] = int(number)
+    return ids
 
 
 class Previews:
@@ -339,14 +393,275 @@ class Previews:
 
 
 # --------------------------------------------------------------------------------------------------
+# Settings
+# --------------------------------------------------------------------------------------------------
+#
+# The settings of the last run are kept in vmr_gui_settings.json next to the program, for example:
+#   {"settingsVersion": 1, "createdBy": "1.2.0", "savedBy": "1.3.0", "fileName": "my rules.vmr",
+#    "lastFolder": "C:\\Users\\me\\Documents\\vPilot Files", "selectedPresets": ["smartwings_group"],
+#    "mtlRules": {"enabled": true, "mode": "standard"}}
+# createdBy and savedBy are the program versions that created the file and wrote it last; they are only
+# information. Whether a file can be used is decided by settingsVersion, the version of the file format, so
+# that a new program version keeps the settings of the previous one:
+#   - A new setting does not change the format: a file without it gets the default for it.
+#   - A value that is missing or not valid falls back to its default; the other settings are kept.
+#   - Settings this version does not know (from a newer version) are kept when the file is written.
+# Only a change that old files cannot follow raises SETTINGS_VERSION, and OLDEST_SUPPORTED_SETTINGS_VERSION
+# when an old file must not be used any more. Such a file, and a file that cannot be read at all, is deleted
+# and the settings start from the defaults; the GUI shows a message about it once.
+SETTINGS_VERSION = 1
+OLDEST_SUPPORTED_SETTINGS_VERSION = 1
+MTL_MODES = ("standard", "all")
+
+
+def _file_name_setting(value):
+    name = Path(str(value).strip()).name
+    if not isinstance(value, str) or not name or len(name) > 255:
+        raise ValueError(value)
+    return name
+
+
+def _folder_setting(value):
+    if not isinstance(value, str):
+        raise ValueError(value)
+    return value.strip()
+
+
+def _presets_setting(value):
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ValueError(value)
+    return list(dict.fromkeys(value))  # without duplicates, in their order
+
+
+def _mtl_setting(value):
+    if not isinstance(value, dict):
+        raise ValueError(value)
+    enabled, mode = value.get("enabled", False), value.get("mode", "standard")
+    if not isinstance(enabled, bool) or mode not in MTL_MODES:
+        raise ValueError(value)
+    return {"enabled": enabled, "mode": mode}
+
+
+# Every setting with its default and the function that checks (and cleans) a value read from the file.
+SETTINGS = {
+    "fileName": ("custom.vmr", _file_name_setting),
+    "lastFolder": ("", _folder_setting),
+    "selectedPresets": ([], _presets_setting),
+    "mtlRules": ({"enabled": False, "mode": "standard"}, _mtl_setting),
+}
+
+
+def default_settings():
+    return json.loads(json.dumps({key: default for key, (default, check) in SETTINGS.items()}))  # a deep copy
+
+
+class Settings:
+    """The settings of the last run. path None keeps them in memory only (used by the tests)."""
+
+    def __init__(self, path):
+        self.path = Path(path) if path else None
+        self.file = {}            # what the file contains, kept so that unknown settings survive a write
+        self.values = default_settings()
+        self.notice = None        # the message for the GUI when the file had to be deleted
+        self.lock = threading.Lock()
+
+    def load(self):
+        if self.path is None or not self.path.is_file():
+            return self
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8-sig"))
+            if not isinstance(data, dict) or not isinstance(data.get("settingsVersion"), int) or isinstance(data.get("settingsVersion"), bool):
+                raise ValueError("not a settings file of the IVAO VMR generator")
+        except (OSError, ValueError) as err:
+            return self._reset("Your settings file could not be read (%s)." % err)
+        if data["settingsVersion"] < OLDEST_SUPPORTED_SETTINGS_VERSION:
+            return self._reset("Your settings file was created by version %s of the IVAO VMR generator, which this version (%s) "
+                               "no longer supports." % (data.get("createdBy") or "unknown", APP_VERSION))
+        self.file = data
+        for key, (default, check) in SETTINGS.items():
+            if key in data:
+                try:
+                    self.values[key] = check(data[key])
+                except ValueError:
+                    print("  Settings: the value of %s is not valid, using the default." % key)
+        return self
+
+    def _reset(self, reason):
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
+        self.file, self.values = {}, default_settings()
+        self.notice = reason + " It was deleted, and the settings were reset to the defaults."
+        print("  " + self.notice)
+        return self
+
+    def take_notice(self):
+        """The message about a deleted settings file, given out only once."""
+        notice, self.notice = self.notice, None
+        return notice
+
+    def update(self, changes):
+        """Takes over the valid known settings in changes and writes the file. Returns the settings."""
+        with self.lock:
+            for key, value in changes.items():
+                if key in SETTINGS:
+                    try:
+                        self.values[key] = SETTINGS[key][1](value)
+                    except ValueError:
+                        pass
+            self._write()
+            return dict(self.values)
+
+    def _write(self):
+        if self.path is None:
+            return
+        # the versions first, so that they are the first thing one sees in the file
+        data = {"settingsVersion": None, "createdBy": None, "savedBy": None}
+        data.update(self.file)
+        for key, value in self.values.items():
+            # inside a group of settings, the parts this version does not know are kept as well
+            if isinstance(value, dict) and isinstance(data.get(key), dict):
+                value = dict(data[key], **value)
+            data[key] = value
+        # a file written by a newer version keeps its format version, so that version can still read it
+        data["settingsVersion"] = max(self.file.get("settingsVersion", 0), SETTINGS_VERSION)
+        data["createdBy"] = self.file.get("createdBy") or APP_VERSION
+        data["savedBy"] = APP_VERSION
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temp = self.path.with_name(self.path.name + ".part")
+            temp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            temp.replace(self.path)
+            self.file = data
+        except OSError as err:
+            # the settings must never stop the program from working
+            print("  Settings could not be saved to %s: %s" % (self.path, err))
+
+
+# --------------------------------------------------------------------------------------------------
+# My rules
+# --------------------------------------------------------------------------------------------------
+
+class MyRules:
+    """The user's own rules ("My rules" in the GUI), kept in vmr_gui_my_rules.vmr next to the program.
+
+    The file is an ordinary VMR, the format vPilot reads, so it does not change between versions of this
+    program and is never deleted with the settings; it can also be opened or imported anywhere. Only complete
+    rules (type and at least one livery) are in it, like in every VMR the GUI writes. path None keeps the
+    rules in memory only (used by the tests)."""
+
+    COMMENT = "My rules from the IVAO VMR generator. They are loaded again at the next start."
+
+    def __init__(self, path):
+        self.path = Path(path) if path else None
+        self.rules = None         # None: there is no file yet (the page may still have rules of an older version)
+        self.notice = None        # the message for the GUI when rules had to be changed
+        self.checked = False      # the rules were compared with the installed liveries in this run
+        self.lock = threading.Lock()
+
+    def load(self):
+        if self.path is not None and self.path.is_file():
+            try:
+                self.rules = parse_vmr(_read_text(self.path))
+            except OSError as err:
+                print("  My rules could not be read from %s: %s" % (self.path, err))
+        return self
+
+    def save(self, rules):
+        """Writes the rules (the format of parse_vmr) and returns them as they are now stored."""
+        with self.lock:
+            text = build_vmr(rules, self.COMMENT)
+            self.rules = parse_vmr(text)
+            if self.path is not None:
+                try:
+                    temp = self.path.with_name(self.path.name + ".part")
+                    temp.write_text(text, encoding="utf-8", newline="")
+                    temp.replace(self.path)
+                except OSError as err:
+                    print("  My rules could not be saved to %s: %s" % (self.path, err))
+            return self.rules
+
+    def remove_missing(self, library):
+        """The IVAO MTL changes: liveries are removed or renamed. A rule loses the liveries that are no longer
+        installed, and a rule left without any livery is removed. This is done once per run, and only when the
+        MTL was found and read without problems: with a wrong models folder or a damaged aircraft.cfg the
+        liveries are only missing for now, and removing rules then would throw away the user's work."""
+        if self.checked or not self.rules:
+            return
+        self.checked = True
+        if not library.airplanes.is_dir() or not library.liveries or library.errors:
+            return
+        kept, removed, shortened = [], [], []
+        for rule in self.rules:
+            installed = [m for m in rule["models"] if m in library.liveries]
+            missing = [m for m in rule["models"] if m not in library.liveries]
+            name = "%s %s" % (rule["callsign"] or rule.get("exactCallsign") or "*", rule["type"])
+            if not installed:
+                removed.append("%s (%s)" % (name, ", ".join(missing)))
+            elif missing:
+                shortened.append("%s (%s)" % (name, ", ".join(missing)))
+                kept.append(dict(rule, models=installed))
+            else:
+                kept.append(rule)
+        if not removed and not shortened:
+            return
+        self.save(kept)
+        parts = []
+        if removed:
+            parts.append("%d of your rules %s removed, because none of %s liveries %s installed any more: %s."
+                         % (len(removed), "was" if len(removed) == 1 else "were", "its" if len(removed) == 1 else "their",
+                            "is" if len(removed) == 1 else "are", "; ".join(removed)))
+        if shortened:
+            parts.append("Liveries that are no longer installed were removed from %d of your rules: %s."
+                         % (len(shortened), "; ".join(shortened)))
+        self.notice = "Your IVAO MTL has changed. " + " ".join(parts)
+        print("  " + self.notice)
+
+    def take_notice(self):
+        notice, self.notice = self.notice, None
+        return notice
+
+
+# --------------------------------------------------------------------------------------------------
 # HTTP server
 # --------------------------------------------------------------------------------------------------
 
 class App:
-    def __init__(self, models_root, output_dir):
+    def __init__(self, models_root, output_dir=None, settings=None, my_rules=None):
+        """output_dir None: the folder of the last saved VMR (from the settings), or DEFAULT_DIR. A folder given
+        on the command line (-p) always wins and is kept for the whole run."""
         self.library = Library(models_root)
+        self.settings = settings or Settings(None)
+        self.my_rules = my_rules or MyRules(None)
+        self.fixed_output_dir = output_dir is not None
+        last = self.settings.values["lastFolder"]
+        if output_dir is None:
+            output_dir = last if last and Path(last).is_dir() else DEFAULT_DIR
         self.output_dir = Path(output_dir)
         self.previews = Previews(PREVIEWS_DIR)
+        self.scan_lock = threading.Lock()
+
+    def saved(self, path):
+        """Remembers where a VMR was saved: the next VMR goes to the same folder, under the same name."""
+        path = Path(path).resolve()
+        if not self.fixed_output_dir:
+            self.output_dir = path.parent
+        self.settings.update({"lastFolder": str(path.parent), "fileName": path.name})
+
+    def scanned_library(self):
+        """The library, scanned on first use by whichever request needs it first (the server answers
+        several requests at a time, the lock keeps it to one scan)."""
+        with self.scan_lock:
+            if not self.library.scanned:
+                self.library.scan()
+        return self.library
+
+    def checked_my_rules(self):
+        """My rules without the liveries that are no longer installed (see MyRules.remove_missing).
+        None when there is no rules file yet."""
+        self.my_rules.remove_missing(self.scanned_library())
+        return self.my_rules.rules
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -379,17 +694,26 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def read_json(self):
+    def read_body(self):
         length = int(self.headers.get("Content-Length", "0"))
-        if length == 0:
-            return {}
-        return json.loads(self.rfile.read(length).decode("utf-8"))
+        return self.rfile.read(length) if length > 0 else b""
+
+    def from_this_computer(self):
+        """The server only answers the GUI itself. A web page from elsewhere that the user has open could
+        otherwise send requests to it: the Host header stops pages that point their own domain name at
+        127.0.0.1 (DNS rebinding), and a POST must be JSON, which a browser only sends cross-site after
+        asking the server first (a CORS preflight, which this server never allows)."""
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            self.send_error(403)
+            return False
+        return True
 
     # ----- routing -----
     def do_GET(self):
-        url = urllib.parse.urlparse(self.path)
-        path = url.path
-        query = urllib.parse.parse_qs(url.query)
+        if not self.from_this_computer():
+            return
+        path = urllib.parse.urlparse(self.path).path
         app = self.app
         if path in ("/", "/index.html"):
             self.send_file(GUI_DIR / "index.html")
@@ -397,8 +721,7 @@ class Handler(BaseHTTPRequestHandler):
             name = Path(path[len("/static/"):]).name
             self.send_file(GUI_DIR / name)
         elif path == "/api/state":
-            if not app.library.scanned:
-                app.library.scan()
+            app.scanned_library()
             self.send_json({
                 "modelsRoot": str(app.library.models_root),
                 "airplanesFolder": str(app.library.airplanes),
@@ -410,6 +733,11 @@ class Handler(BaseHTTPRequestHandler):
                 "mtlRules": {"all": app.library.mtl_rules(False), "standard": app.library.mtl_rules(True)},
                 "catalogSearch": CATALOG_SEARCH,
                 "previewsDir": str(PREVIEWS_DIR),
+                "version": APP_VERSION,
+                "settings": app.settings.values,
+                "settingsNotice": app.settings.take_notice(),
+                "myRules": app.checked_my_rules(),
+                "myRulesNotice": app.my_rules.take_notice(),
             })
         elif path == "/api/rescan":
             app.library.scan()
@@ -420,35 +748,27 @@ class Handler(BaseHTTPRequestHandler):
             })
         elif path.startswith("/api/preview/"):
             # the catalog picture of a livery (downloaded on first use, then served from the previews folder)
-            livery = app.library.liveries.get(urllib.parse.unquote(path[len("/api/preview/"):]))
+            livery = app.scanned_library().liveries.get(urllib.parse.unquote(path[len("/api/preview/"):]))
             picture = app.previews.get(livery["catalogId"]) if livery and livery.get("catalogId") else None
             if picture:
                 self.send_file(picture, cache=True)
             else:
                 self.send_error(404)
-        elif path == "/api/livery-list.csv":
-            body = app.library.livery_list_csv().encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/csv; charset=utf-8")
-            self.send_header("Content-Disposition", 'attachment; filename="ivaomtl_liveries.csv"')
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        elif path == "/api/parse-vmr":
-            # ?file=<path> reads a VMR file from disk (for example an existing custom VMR)
-            file_path = query.get("file", [""])[0]
-            if not file_path or not Path(file_path).is_file():
-                self.send_json({"error": "File not found: " + file_path}, 404)
-            else:
-                self.send_json({"rules": parse_vmr(_read_text(file_path))})
         else:
             self.send_error(404)
 
     def do_POST(self):
+        # Read the body before any answer: closing the connection with an unread body resets it on Windows.
+        body = self.read_body()
+        if not self.from_this_computer():
+            return
+        if self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json":
+            self.send_json({"error": "Expected application/json"}, 415)
+            return
         path = urllib.parse.urlparse(self.path).path
         app = self.app
         try:
-            data = self.read_json()
+            data = json.loads(body.decode("utf-8")) if body else {}
         except ValueError as err:
             self.send_json({"error": "Invalid JSON: %s" % err}, 400)
             return
@@ -461,20 +781,24 @@ class Handler(BaseHTTPRequestHandler):
             if not name.lower().endswith(".vmr"):
                 name += ".vmr"
             target = app.output_dir / name
-            written = []
             try:
                 app.output_dir.mkdir(parents=True, exist_ok=True)
                 target.write_text(build_vmr(data.get("rules", []), data.get("comment")), encoding="utf-8", newline="")
-                written.append(str(target.resolve()))
-                if data.get("liveryList"):
-                    # Like create_vmr.py: the list of liveries next to the VMR, with their catalog names.
-                    csv_target = target.with_name(target.stem + "_liveries.csv")
-                    csv_target.write_text(app.library.livery_list_csv(), encoding="utf-8", newline="")
-                    written.append(str(csv_target.resolve()))
             except OSError as err:
                 self.send_json({"error": "Could not write %s: %s" % (target, err)}, 500)
                 return
-            self.send_json({"path": written[0], "files": written})
+            app.saved(target)
+            self.send_json({"path": str(target.resolve()), "outputDir": str(app.output_dir)})
+        elif path == "/api/my-rules":
+            # the page sends all its own rules after every change; incomplete ones are not stored
+            rules = data.get("rules")
+            if not isinstance(rules, list) or not all(isinstance(r, dict) for r in rules):
+                self.send_json({"error": "Expected a list of rules"}, 400)
+                return
+            self.send_json({"rules": app.my_rules.save(rules)})
+        elif path == "/api/settings":
+            # the page sends the settings it changed (file name, ticked presets, MTL choice)
+            self.send_json({"settings": app.settings.update(data.get("settings") or {})})
         else:
             self.send_error(404)
 
@@ -482,16 +806,19 @@ class Handler(BaseHTTPRequestHandler):
 class JsApi:
     """Functions the page can call through window.pywebview.api when the GUI runs in its own window."""
 
-    def __init__(self):
+    def __init__(self, app=None):
         # Underscore: pywebview exposes every public attribute of this object to the page and walks
         # it recursively. Walking the Window object (and the .NET form behind it) never finishes and
         # the page then never gets its window.pywebview.api.
         self._window = None
+        self._app = app
 
     def save_as(self, file_name, text):
-        """Shows the Windows "Save as" dialog and writes the VMR text to the chosen file."""
+        """Shows the Windows "Save as" dialog, opened in the folder of the last saved VMR, and writes the VMR
+        text to the chosen file."""
         import webview
-        result = self._window.create_file_dialog(webview.FileDialog.SAVE, save_filename=file_name, file_types=("VMR files (*.vmr)", "All files (*.*)"))
+        folder = str(self._app.output_dir.resolve()) if self._app else ""
+        result = self._window.create_file_dialog(webview.FileDialog.SAVE, directory=folder, save_filename=file_name, file_types=("VMR files (*.vmr)", "All files (*.*)"))
         if not result:
             return {"cancelled": True}
         path = result[0] if isinstance(result, (list, tuple)) else result
@@ -499,6 +826,9 @@ class JsApi:
             Path(path).write_text(text, encoding="utf-8", newline="")
         except OSError as err:
             return {"error": str(err)}
+        if self._app:
+            self._app.saved(path)
+            return {"path": str(path), "outputDir": str(self._app.output_dir)}
         return {"path": str(path)}
 
     def open_file(self):
@@ -514,14 +844,14 @@ class JsApi:
             return {"error": str(err)}
 
 
-def show_window(url, server):
+def show_window(url, server, app=None):
     """Shows the GUI in its own window. Returns False when pywebview is not available."""
     try:
         import webview
     except ImportError as err:
         print("pywebview is not installed (%s), opening the browser instead." % err)
         return False
-    api = JsApi()
+    api = JsApi(app)
     print("  Opening the window (pywebview %s)." % getattr(webview, "__version__", "?"))
     window = webview.create_window("IVAO VMR generator", url, js_api=api, width=1500, height=950, min_size=(1000, 650))
     api._window = window
@@ -554,31 +884,39 @@ def show_window(url, server):
 def main():
     parser = argparse.ArgumentParser(description="GUI for building a custom vPilot VMR on top of the IVAO MTL.")
     parser.add_argument("-d", "--directory", default=DEFAULT_DIR, help="folder that contains SimObjects/Airplanes (default: %s)" % ("the folder of the .exe" if FROZEN else "current folder"))
-    parser.add_argument("-p", "--output-directory", default=DEFAULT_DIR, help="folder where VMR files are saved (default: the same folder)")
+    parser.add_argument("-p", "--output-directory", default=None, help="folder where VMR files are saved (default: the folder of the last saved VMR, the first time the same folder as -d)")
     parser.add_argument("--port", type=int, default=8765, help="port of the local server (default: 8765, a free port is used if it is taken)")
     parser.add_argument("--browser", action="store_true", help="show the GUI in the web browser instead of its own window")
     parser.add_argument("--no-browser", action="store_true", help="only run the server, do not open a window or a browser")
     args = parser.parse_args()
 
-    Handler.app = App(args.directory, args.output_directory)
+    print("IVAO VMR generator GUI " + APP_VERSION)
+    settings = Settings(SETTINGS_FILE).load()
+    app = Handler.app = App(args.directory, args.output_directory, settings, MyRules(MY_RULES_FILE).load())
     try:
         server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     except OSError:
         # The port is taken (for example by a second copy of the GUI): let the system pick a free one.
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     url = "http://127.0.0.1:%d/" % server.server_address[1]
-    print("IVAO VMR generator GUI")
+    print("  Settings: " + str(SETTINGS_FILE))
+    print("  My rules: " + str(MY_RULES_FILE))
     print("  Models folder: " + os.path.abspath(args.directory))
-    print("  Output folder: " + os.path.abspath(args.output_directory))
+    print("  Output folder: " + os.path.abspath(app.output_dir))
     print("  GUI address: " + url)
 
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     try:
-        if args.no_browser:
+        if args.no_browser and SELF_TEST:
+            # the server smoke test of the build workflow: answer requests for a while, then stop cleanly
+            print("  Self-test: server only, stopping after %g s." % SELF_TEST_SERVER_SECONDS)
+            server_thread.join(SELF_TEST_SERVER_SECONDS)
+            print("  Self-test: stopping the server.")
+        elif args.no_browser:
             print("  Server only (--no-browser). Press Ctrl+C to stop.")
             server_thread.join()
-        elif not args.browser and show_window(url, server):
+        elif not args.browser and show_window(url, server, app):
             pass
         else:
             if SELF_TEST:
@@ -614,7 +952,7 @@ if __name__ == "__main__":
         # Backstop for the build workflow: never hang around, whatever the window does.
         def watchdog():
             import time
-            time.sleep(40)
+            time.sleep(max(40, SELF_TEST_SERVER_SECONDS + 10))
             print("  Self-test: watchdog fired, the program did not finish in time.")
             sys.stdout.flush()
             os._exit(3)
