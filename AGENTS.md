@@ -33,7 +33,7 @@ the VMR tells it which MTL livery to load for a given callsign and aircraft type
 | `LICENSE`, `NOTICE` | Apache 2.0 (the unmodified text) and the copyright and attribution notice. |
 | `tools/collect_licenses.py`, `tools/licenses/` | Generate `THIRD-PARTY-LICENSES.txt` for the release from the packages bundled into the exe. |
 | `build_exe.spec` | PyInstaller spec for the portable `IVAO_VMR_Generator.exe`. It bundles `gui/`, `presets/` and `version.txt`, and writes the Windows version resource. Both versions come from the `APP_VERSION` environment variable (`0.0.0` if not set). |
-| `.github/workflows/build-exe.yml` | CI: tests, then exe build, server and window smoke tests, SignPath signing and release on `v*` tags. |
+| `.github/workflows/build-exe.yml` | CI: tests, then exe build, server and window smoke tests, and release on `v*` tags. |
 
 Files the programs write at run time (all git-ignored, never commit them):
 - next to `vmr_gui.py` or the exe: `vmr_gui_settings.json` (settings, see invariant 10), `vmr_gui_my_rules.vmr`
@@ -98,8 +98,8 @@ Running the GUI from source in the repository folder therefore creates these fil
 5. **The GUI never writes into the MTL.** It only writes VMR files to the output folder, previews to `previews/`, and `vmr_gui_settings.json`, `vmr_gui_my_rules.vmr` and `vmr_gui.log` next to the program.
 6. **The local server answers only this computer.** It checks the Host header, POSTs must be `application/json`,
    and there is no endpoint that reads arbitrary paths. Keep it that way when you add endpoints.
-7. **The README privacy policy must stay true.** It is part of the SignPath Foundation code-signing
-   requirements. If the program starts contacting a new host or sending new data, update the policy in the same PR.
+7. **The README privacy section must stay true.** If the program starts contacting a new host or sending new
+   data, update it in the same PR.
 8. Output files: UTF-8. GUI VMRs use CRLF. Escape every attribute value with `xml_attr`.
 9. **Licensing.** The project is Apache 2.0 and derived from Andrew Ward's original, so the license cannot be
    changed. Don't edit the `LICENSE` text; copyright holders and attribution go in `NOTICE`. When the exe gets
@@ -136,7 +136,7 @@ Running the GUI from source in the repository folder therefore creates these fil
 ## The test suite
 
 **Keep it up to date with every change. This is not optional.** The tests are the only thing that stops the
-script and the GUI from drifting apart again, and the only check before a signed release goes out. When you
+script and the GUI from drifting apart again, and the only check before a release goes out. When you
 change behaviour, update the tests in the same commit:
 
 - **New behaviour → new tests.** Bug fixes get a test that fails without the fix.
@@ -224,10 +224,10 @@ plain, explanatory comment style of the rest of the code.
 - Every PR that changes behaviour includes the matching test changes. Reviewers should reject it otherwise.
 - **Releases:**
   1. Merge the PR into `vojta48/create-ivao-vmr:main`.
-  2. Push a tag `vX.Y.Z` on that commit. Only there: never tag a fork, because signing and releases are set
-     up only in vojta48's repository.
-  3. CI builds the exe with `APP_VERSION` from the tag, SignPath signs it after a manual approval, and the
-     release gets the exe, `LICENSE`, `NOTICE` and `THIRD-PARTY-LICENSES.txt`.
+  2. Push a tag `vX.Y.Z` on that commit. Only there: never tag a fork, because releases are published only
+     from vojta48's repository.
+  3. CI builds the exe with `APP_VERSION` from the tag, and the release gets the exe, `LICENSE`, `NOTICE` and
+     `THIRD-PARTY-LICENSES.txt`. The exe is not code signed.
   4. Add the release notes, written for users rather than developers, to the GitHub release.
   Releases are never built on a developer machine. If the settings file format changes in a release, see
   invariant 10 and say so in the release notes.

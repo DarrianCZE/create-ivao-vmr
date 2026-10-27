@@ -18,7 +18,7 @@ Both generate exactly the same rules from the MTL.
 ## IVAO VMR Generator (GUI)
 
 ### Start it
-**Portable .exe (no Python, no installation):** download `IVAO_VMR_Generator.exe` from the [releases](https://github.com/vojta48/create-ivao-vmr/releases), put it into your `IVAO_MTL` folder and double-click it. The program opens in its own window, using the Microsoft Edge WebView2 runtime that is part of Windows 10 and 11. The version is shown next to the title. Release builds are code signed (see [Code signing policy](#code-signing-policy)). A build you take from a workflow run under *Actions* is not signed, so Windows SmartScreen may warn about an unknown publisher; use such a file only if you trust where it came from.
+**Portable .exe (no Python, no installation):** download `IVAO_VMR_Generator.exe` from the [releases](https://github.com/vojta48/create-ivao-vmr/releases), put it into your `IVAO_MTL` folder and double-click it. The program opens in its own window, using the Microsoft Edge WebView2 runtime that is part of Windows 10 and 11. The version is shown next to the title. The exe is not code signed, so Windows SmartScreen may warn about an unknown publisher the first time you run it; click *More info → Run anyway*. Only use a copy you downloaded from this project's releases or built yourself (see [Privacy](#privacy)).
 
 **From source:** put `create_vmr.py`, `vmr_gui.py`, the `gui` folder and the `presets` folder into your `IVAO_MTL` folder and run `python vmr_gui.py` (requires [Python](https://www.python.org/) 3). With `pip install pywebview` it opens in its own window; without it, it opens in your browser at http://127.0.0.1:8765.
 
@@ -127,7 +127,7 @@ If the script cannot write the fix (for example because the file is read-only), 
 ## Development
 - Tests: `python -m unittest discover -s tests` (standard library only, no MTL needed; the JavaScript tests also need Node.js). They cover the script, the GUI server and front end, and check that `create_vmr.py` and the GUI generate the same rules. The workflow runs them before every build. To also check against your installed MTL (read-only), set `IVAO_MTL_DIR` to its folder and run `python -m unittest discover -s tests -p test_real_mtl.py -v`. Every change has to come with matching tests; see [AGENTS.md](AGENTS.md#the-test-suite).
 - Build the .exe on Windows: `pip install pyinstaller pywebview`, then `pyinstaller build_exe.spec`. The result is `dist/IVAO_VMR_Generator.exe`. It shows the version `0.0.0` unless you set it first, for example `$env:APP_VERSION = "1.1.0-test"` in PowerShell. Running from source shows `dev`.
-- The GitHub Actions workflow `build-exe.yml` runs the tests, builds the exe and smoke tests it for every pull request and every push to `main`. For a `v*` tag it also has the exe signed and attaches it to the release together with `LICENSE`, `NOTICE` and `THIRD-PARTY-LICENSES.txt`. The version comes from the tag (`v1.1.0` gives `1.1.0`).
+- The GitHub Actions workflow `build-exe.yml` runs the tests, builds the exe and smoke tests it for every pull request and every push to `main`. For a `v*` tag it also attaches the exe to the release together with `LICENSE`, `NOTICE` and `THIRD-PARTY-LICENSES.txt`. The version comes from the tag (`v1.1.0` gives `1.1.0`).
 - Notes for contributors and AI coding agents are in [AGENTS.md](AGENTS.md).
 
 ## License
@@ -137,20 +137,7 @@ The .exe also contains third-party software under its own licenses: Python, pywe
 
 This project is not affiliated with or endorsed by IVAO, VATSIM, the author of vPilot or Microsoft. The livery pictures come from the IVAO MTL catalog at run time and are not part of this project.
 
-## Code signing policy
-Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+## Privacy
+The program runs entirely on your computer. It does not collect, store or send any personal data, usage statistics or crash reports. The only internet connection it makes is to download the pictures of the liveries it shows from the MTL catalog (`download.ivao.aero`); the request contains nothing but the catalog number of the livery. Each picture is downloaded once and kept in the `previews` folder next to the program. Your settings and your own rules are kept in `vmr_gui_settings.json` and `vmr_gui_my_rules.vmr` next to the program and never leave your computer. Clicking a livery link opens `mtl.ivao.aero` in your browser. Both are covered by [IVAO's privacy policy](https://ivao.aero/privacy). `create_vmr.py` makes no internet connection at all. The local server of the GUI only accepts connections from your own computer.
 
-The Windows executable `IVAO_VMR_Generator.exe` attached to a [release](https://github.com/vojta48/create-ivao-vmr/releases) is digitally signed, so that Windows can verify who published the file and that it was not changed after the build. To check the signature, open the file's *Properties → Digital Signatures* in Windows Explorer, or run `Get-AuthenticodeSignature IVAO_VMR_Generator.exe` in PowerShell. The signer is *SignPath Foundation*. An executable that is not signed (a workflow artifact of a pull request, or a build you made yourself) should only be used if you built it or trust where it came from.
-
-**How a release is built and signed.** Every release is built by [GitHub Actions](https://github.com/vojta48/create-ivao-vmr/actions/workflows/build-exe.yml) from the source code of this repository (`build-exe.yml` and `build_exe.spec`), never on a developer's computer. SignPath verifies that the executable comes from this repository's build, and the signing request is then approved by hand by an approver listed below. Every signing request requires this manual approval. The private key is kept in SignPath's hardware security module; nobody involved in the project has it.
-
-**Team roles.** Changes from anyone outside the team are reviewed before they are merged.
-
-| Role | Members |
-| --- | --- |
-| Committers and reviewers | [vojta48](https://github.com/vojta48), [DarrianCZE](https://github.com/DarrianCZE) |
-| Approvers | [vojta48](https://github.com/vojta48) |
-
-**Privacy policy.** The program runs entirely on your computer. It does not collect, store or send any personal data, usage statistics or crash reports. The only internet connection it makes is to download the pictures of the liveries it shows from the MTL catalog (`download.ivao.aero`); the request contains nothing but the catalog number of the livery. Each picture is downloaded once and kept in the `previews` folder next to the program. Your settings and your own rules are kept in `vmr_gui_settings.json` and `vmr_gui_my_rules.vmr` next to the program and never leave your computer. Clicking a livery link opens `mtl.ivao.aero` in your browser. Both are covered by [IVAO's privacy policy](https://ivao.aero/privacy). `create_vmr.py` makes no internet connection at all. The local server of the GUI only accepts connections from your own computer.
-
-**Reporting a problem.** If you think a signed release contains something it should not, do not run it and open an [issue](https://github.com/vojta48/create-ivao-vmr/issues) with the file's SHA256 hash and where you downloaded it.
+Every release is built by [GitHub Actions](https://github.com/vojta48/create-ivao-vmr/actions/workflows/build-exe.yml) from the source code of this repository (`build-exe.yml` and `build_exe.spec`), never on a developer's computer. If you think a release contains something it should not, do not run it and open an [issue](https://github.com/vojta48/create-ivao-vmr/issues) with the file's SHA256 hash and where you downloaded it.
